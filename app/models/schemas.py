@@ -48,3 +48,4 @@ class ReviewReportResponse(BaseModel):
     summary: Optional[str] = None
     markdown_report: Optional[str] = None
     json_report: Optional[dict] = None
+    generated_tests: List[Any] = Field(default_factory=list)

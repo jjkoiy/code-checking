@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import logging
 
+from app.agents.diff_utils import added_text_by_file
+
 logger = logging.getLogger(__name__)
 
 _CHECKS: list[dict] = [
@@ -108,31 +110,38 @@ def analyze(diff_text: str, changed_files: list[dict]) -> list[dict]:
         return []
 
     findings: list[dict] = []
+    added_by_file = added_text_by_file(diff_text)
+    if not added_by_file:
+        return findings
+    languages_by_file = {
+        f.get("file_path"): f.get("language")
+        for f in changed_files
+        if f.get("file_path")
+    }
 
     for check in _CHECKS:
         lang_filter = check.get("languages")
-        if lang_filter and changed_files:
-            file_langs = {f.get("language") for f in changed_files}
-            if not file_langs.intersection(lang_filter):
+
+        for file_path, (added_text, line_numbers) in added_by_file.items():
+            if lang_filter and languages_by_file.get(file_path) not in lang_filter:
                 continue
+            for m in check["pattern"].finditer(added_text):
+                added_index = _line_number(added_text, m.start()) - 1
+                linenum = line_numbers[added_index] if added_index < len(line_numbers) else None
+                evidence = added_text[max(0, m.start() - 20):m.end() + 40].strip().replace("\n", " ")[:200]
 
-        for m in check["pattern"].finditer(diff_text):
-            linenum = _line_number(diff_text, m.start())
-
-            evidence = diff_text[max(0, m.start() - 20):m.end() + 40].strip().replace("\n", " ")[:200]
-
-            findings.append({
-                "agent_name": "static_analysis_agent",
-                "severity": check["severity"],
-                "category": check["category"],
-                "file_path": None,
-                "line_number": linenum,
-                "title": check["title"],
-                "description": check["description"],
-                "evidence": evidence,
-                "suggestion": check["suggestion"],
-                "confidence": 0.75,
-            })
+                findings.append({
+                    "agent_name": "static_analysis_agent",
+                    "severity": check["severity"],
+                    "category": check["category"],
+                    "file_path": file_path,
+                    "line_number": linenum,
+                    "title": check["title"],
+                    "description": check["description"],
+                    "evidence": evidence,
+                    "suggestion": check["suggestion"],
+                    "confidence": 0.75,
+                })
 
     logger.info("Static analysis produced %d finding(s).", len(findings))
     return findings

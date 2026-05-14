@@ -17,6 +17,23 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _serialize_changed_files(req: CreateReviewRequest) -> str | None:
+    if not req.changed_files:
+        return None
+    return json.dumps([item.model_dump() for item in req.changed_files])
+
+
+def _load_changed_files(task: ReviewTask) -> list[dict]:
+    if not task.changed_files_json:
+        return []
+    try:
+        loaded = json.loads(task.changed_files_json)
+    except json.JSONDecodeError:
+        logger.warning("Invalid changed_files_json for task=%s", task.id)
+        return []
+    return loaded if isinstance(loaded, list) else []
+
+
 def create_review(req: CreateReviewRequest) -> ReviewTask:
     db: Session = SessionLocal()
     try:
@@ -27,6 +44,7 @@ def create_review(req: CreateReviewRequest) -> ReviewTask:
             base_ref=req.base_ref,
             head_ref=req.head_ref,
             diff_text=req.diff_text,
+            changed_files_json=_serialize_changed_files(req),
             status="pending",
         )
         db.add(task)
@@ -45,6 +63,19 @@ def get_review(task_id: str) -> Optional[ReviewTask]:
         db.close()
 
 
+def save_findings(db: Session, task: ReviewTask, findings: list[dict]) -> dict:
+    """Save Agent findings for a review task."""
+    task.findings_json = json.dumps(findings)
+    return {"saved_count": len(findings)}
+
+
+def save_report(db: Session, task: ReviewTask, markdown_report: str, json_report: dict) -> dict:
+    """Save the final Markdown and JSON review report."""
+    task.report_json = json.dumps(json_report)
+    task.report_markdown = markdown_report
+    return {"report_id": task.id, "saved": True}
+
+
 def run_review_and_save(task_id: str) -> ReviewTask:
     """Run the agent pipeline for a task and persist results synchronously."""
     from app.agents.orchestrator import run_review_pipeline
@@ -61,11 +92,11 @@ def run_review_and_save(task_id: str) -> ReviewTask:
         task.updated_at = _utcnow()
         db.commit()
 
-        # Build changed_files from diff_text
-        changed_files: list[dict] = []
+        # Build changed_files from persisted request data, falling back to diff parsing.
+        changed_files: list[dict] = _load_changed_files(task)
         if task.diff_text:
             from app.agents.context_builder import parse_diff
-            changed_files = parse_diff(task.diff_text)
+            changed_files = changed_files or parse_diff(task.diff_text)
 
         state: ReviewState = {
             "task_id": task_id,
@@ -92,21 +123,21 @@ def run_review_and_save(task_id: str) -> ReviewTask:
         }
 
         report_result = run_review_pipeline(task_id, state)
+        json_report = report_result.get("json_report", {})
+        pipeline_error = json_report.get("error") if isinstance(json_report, dict) else None
 
         # Persist results
-        task.status = "completed"
-        task.current_stage = "completed"
-        task.findings_json = json.dumps({
-            "aggregated": state.get("aggregated_findings", []),
-            "llm": state.get("llm_findings", []),
-        })
-        task.report_json = json.dumps(report_result.get("json_report", {}))
-        task.report_markdown = report_result.get("markdown_report", "")
+        task.status = "failed" if pipeline_error else "completed"
+        task.current_stage = "failed" if pipeline_error else "completed"
+        task.error_message = str(pipeline_error) if pipeline_error else None
+        findings = json_report.get("findings", []) if isinstance(json_report, dict) else []
+        save_findings(db, task, findings)
+        save_report(db, task, report_result.get("markdown_report", ""), json_report)
         task.updated_at = _utcnow()
         db.commit()
         db.refresh(task)
 
-        logger.info("Review task %s completed and saved.", task_id)
+        logger.info("Review task %s finished with status=%s and saved.", task_id, task.status)
         return task
     except Exception:
         db.rollback()
@@ -115,6 +146,7 @@ def run_review_and_save(task_id: str) -> ReviewTask:
             if task:
                 task.status = "failed"
                 task.current_stage = "failed"
+                task.error_message = "Review pipeline failed; check server logs for details."
                 task.updated_at = _utcnow()
                 db.commit()
         except Exception:

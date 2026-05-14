@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import logging
 
+from app.agents.diff_utils import added_text_by_file
+
 logger = logging.getLogger(__name__)
 
 _CHECKS: list[dict] = [
@@ -124,26 +126,30 @@ def scan(diff_text: str, changed_files: list[dict]) -> list[dict]:
         return []
 
     findings: list[dict] = []
+    added_by_file = added_text_by_file(diff_text)
+    if not added_by_file:
+        return findings
 
     for check in _CHECKS:
-        for m in check["pattern"].finditer(diff_text):
-            linenum = _line_number(diff_text, m.start())
+        for file_path, (added_text, line_numbers) in added_by_file.items():
+            for m in check["pattern"].finditer(added_text):
+                added_index = _line_number(added_text, m.start()) - 1
+                linenum = line_numbers[added_index] if added_index < len(line_numbers) else None
+                evidence = added_text[max(0, m.start() - 20):m.end() + 40].strip().replace("\n", " ")[:200]
 
-            evidence = diff_text[max(0, m.start() - 20):m.end() + 40].strip().replace("\n", " ")[:200]
-
-            findings.append({
-                "agent_name": "security_agent",
-                "severity": check["severity"],
-                "category": "security",
-                "file_path": None,
-                "line_number": linenum,
-                "title": check["title"],
-                "description": check["description"],
-                "evidence": evidence,
-                "attack_scenario": check.get("attack_scenario", ""),
-                "suggestion": check["suggestion"],
-                "confidence": 0.80,
-            })
+                findings.append({
+                    "agent_name": "security_agent",
+                    "severity": check["severity"],
+                    "category": "security",
+                    "file_path": file_path,
+                    "line_number": linenum,
+                    "title": check["title"],
+                    "description": check["description"],
+                    "evidence": evidence,
+                    "attack_scenario": check.get("attack_scenario", ""),
+                    "suggestion": check["suggestion"],
+                    "confidence": 0.80,
+                })
 
     logger.info("Security scan produced %d finding(s).", len(findings))
     return findings

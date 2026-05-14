@@ -89,4 +89,5 @@ def get_review_report(task_id: str) -> ReviewReportResponse:
         summary=json_report.get("summary", "") if json_report else None,
         markdown_report=task.report_markdown,
         json_report=json_report,
+        generated_tests=json_report.get("generated_tests", []) if json_report else [],
     )

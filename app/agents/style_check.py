@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import logging
 
+from app.agents.diff_utils import iter_added_lines
+
 logger = logging.getLogger(__name__)
 
 _CHECKS: list[dict] = [
@@ -59,14 +61,10 @@ def check(changed_files: list[dict], diff_text: str = "") -> list[dict]:
     """Run style checks on changed files. Returns list of Finding dicts."""
     findings: list[dict] = []
 
-    for f_info in changed_files:
-        content = f_info.get("content", "")
-        file_path = f_info.get("file_path", "")
-
-        # Check for TODO/FIXME in the diff text
-        if diff_text:
-            for m in re.finditer(r"\b(?:TODO|FIXME|HACK)\b", diff_text):
-                linenum = _line_number(diff_text, m.start())
+    # Check only newly added diff lines so findings are not duplicated per changed file.
+    if diff_text:
+        for file_path, linenum, line_text in iter_added_lines(diff_text):
+            for m in re.finditer(r"\b(?:TODO|FIXME|HACK)\b", line_text):
                 findings.append({
                     "agent_name": "style_agent",
                     "severity": "low",
@@ -75,7 +73,7 @@ def check(changed_files: list[dict], diff_text: str = "") -> list[dict]:
                     "line_number": linenum,
                     "title": "TODO/FIXME left in code",
                     "description": "Unresolved TODO or FIXME comment may indicate incomplete work.",
-                    "evidence": diff_text[max(0, m.start() - 10):m.end() + 30].strip(),
+                    "evidence": line_text[max(0, m.start() - 10):m.end() + 30].strip(),
                     "suggestion": "Address the item or convert it to a tracked ticket.",
                     "confidence": 0.60,
                 })

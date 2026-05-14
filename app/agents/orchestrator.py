@@ -17,18 +17,43 @@ from app.agents import test_impact, test_generation, validation, report
 logger = logging.getLogger(__name__)
 
 
+def _merge_changed_files(existing: list[dict], parsed: list[dict]) -> list[dict]:
+    """Merge parsed diff metadata without dropping request-provided fields like content."""
+    if not parsed:
+        return existing
+
+    existing_by_path = {item.get("file_path"): item for item in existing if item.get("file_path")}
+    parsed_paths = {item.get("file_path") for item in parsed}
+    merged: list[dict] = []
+
+    for parsed_item in parsed:
+        file_path = parsed_item.get("file_path")
+        combined = dict(existing_by_path.get(file_path, {}))
+        combined.update(parsed_item)
+        merged.append(combined)
+
+    merged.extend(
+        item for item in existing
+        if item.get("file_path") and item.get("file_path") not in parsed_paths
+    )
+    return merged
+
+
 # ── Node functions ────────────────────────────────────────────────
 
 def _context_builder_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: context_builder")
     state["status"] = "context_building"
     try:
+        state["changed_files"] = _merge_changed_files(
+            existing=state.get("changed_files", []),
+            parsed=context_builder.parse_diff(state.get("diff_text", "")),
+        )
         ctx = context_builder.build_context(
             diff_text=state.get("diff_text", ""),
             changed_files=state.get("changed_files", []),
         )
         state["project_context"] = ctx
-        state["changed_files"] = context_builder.parse_diff(state.get("diff_text", "")) or state.get("changed_files", [])
         state["status"] = "context_ready"
     except Exception as e:
         logger.error("Context builder failed: %s", e)
@@ -138,7 +163,7 @@ def _llm_review_node(state: ReviewState) -> ReviewState:
 
 
 def _test_generation_node(state: ReviewState) -> ReviewState:
-    logger.info("Stage: test_generation (P2 stub)")
+    logger.info("Stage: test_generation")
     state["status"] = "test_generation"
     try:
         result = test_generation.generate(
@@ -156,7 +181,7 @@ def _test_generation_node(state: ReviewState) -> ReviewState:
 
 
 def _validation_node(state: ReviewState) -> ReviewState:
-    logger.info("Stage: validation (P2 stub)")
+    logger.info("Stage: validation")
     state["status"] = "validation"
     try:
         result = validation.validate(
@@ -180,8 +205,14 @@ def _report_node(state: ReviewState) -> ReviewState:
             test_generation_result=state.get("test_generation_result", {}),
             validation_result=state.get("validation_result", {}),
         )
+        if state.get("errors"):
+            result.setdefault("json_report", {})["error"] = "One or more review stages failed."
+            result["json_report"]["pipeline_errors"] = state["errors"]
+            result["markdown_report"] += "\n## Pipeline Errors\n\n"
+            for err in state["errors"]:
+                result["markdown_report"] += f"- **{err.get('agent', 'unknown')}**: {err.get('error', '')}\n"
         state["final_report"] = result
-        state["status"] = "completed"
+        state["status"] = "failed" if state.get("errors") else "completed"
     except Exception as e:
         logger.error("Report generation failed: %s", e)
         state["errors"].append({"agent": "report", "error": str(e)})

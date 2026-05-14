@@ -6,6 +6,8 @@ import re
 import logging
 from pathlib import Path
 
+from app.services.vector_store import vector_search
+
 logger = logging.getLogger(__name__)
 
 _LANG_MAP = {
@@ -105,13 +107,22 @@ def build_context(diff_text: str, changed_files: list[dict] | None = None) -> di
 
     diff_lower = diff_text.lower()
     risk_hints = [kw for kw in _RISK_KEYWORDS if kw in diff_lower]
+    search_query = " ".join(changed_modules + risk_hints + languages) or diff_text[:500]
+    relevant_rules: list[dict] = []
+    relevant_test_examples: list[dict] = []
+    try:
+        relevant_rules.extend(vector_search("review_rules", search_query, top_k=3)["documents"])
+        relevant_rules.extend(vector_search("security_rules", search_query, top_k=3)["documents"])
+        relevant_test_examples.extend(vector_search("test_examples", search_query, top_k=3)["documents"])
+    except Exception as e:
+        logger.warning("Vector context lookup skipped: %s", e)
 
     return {
         "languages": languages,
         "changed_modules": changed_modules,
         "risk_hints": risk_hints,
-        "relevant_rules": [],
-        "relevant_test_examples": [],
+        "relevant_rules": relevant_rules,
+        "relevant_test_examples": relevant_test_examples,
         "context_summary": (
             f"{len(changed_files)} file(s) changed in {len(languages)} language(s). "
             f"Risk keywords found: {', '.join(risk_hints) if risk_hints else 'none'}."

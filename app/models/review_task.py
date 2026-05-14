@@ -26,6 +26,7 @@ class ReviewTask(Base):
     base_ref = Column(String, nullable=True)
     head_ref = Column(String, nullable=True)
     diff_text = Column(Text, nullable=True)
+    changed_files_json = Column(Text, nullable=True)
     status = Column(String, nullable=False, default="pending")
     current_stage = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)

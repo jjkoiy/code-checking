@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import logging
-import uuid
+import json
 
 from app.config import settings
+from app.services.llm_client import call_llm
 
 logger = logging.getLogger(__name__)
+
+LLM_REVIEW_SYSTEM_PROMPT = """You are the LLM Review Agent in a multi-agent code review system.
+Return only JSON with this shape: {"findings": [Finding]}.
+Each Finding must include agent_name, severity, category, file_path, line_number, title,
+description, evidence, suggestion, confidence. Only report issues supported by the diff."""
 
 
 def _mock_llm_call(system_prompt: str, user_prompt: str) -> list[dict]:
@@ -111,16 +117,35 @@ def review(diff_text: str, changed_files: list[dict],
         f"Diff length: {len(diff_text)} chars."
     )
 
-    logger.info("LLM Review Agent: mock mode (provider=%s, model=%s)", settings.llm_provider, settings.llm_model)
+    user_prompt = json.dumps({
+        "diff_text": diff_text[: settings.review_max_diff_chars],
+        "changed_files": changed_files,
+        "aggregated_findings": aggregated_findings,
+        "project_context": project_context,
+    })
 
-    # TODO P2: Replace with real LLM call:
-    #   response = call_llm(
-    #       model=settings.llm_model,
-    #       system_prompt=LLM_REVIEW_SYSTEM_PROMPT,
-    #       user_prompt=combined_context,
-    #       response_format="json",
-    #   )
-    #   return response.parsed_json
+    if settings.llm_provider == "mock" or not settings.llm_api_key:
+        return _mock_llm_call(
+            system_prompt="",
+            user_prompt=user_prompt + " " + combined_context,
+        )
+
+    try:
+        response = call_llm(
+            model=settings.llm_model,
+            system_prompt=LLM_REVIEW_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            response_format="json",
+        )
+        parsed = response.get("parsed_json")
+        if isinstance(parsed, dict) and isinstance(parsed.get("findings"), list):
+            logger.info("LLM review produced %d finding(s).", len(parsed["findings"]))
+            return parsed["findings"]
+        if isinstance(parsed, list):
+            logger.info("LLM review produced %d finding(s).", len(parsed))
+            return parsed
+    except Exception as e:
+        logger.warning("LLM review fell back to mock heuristics: %s", e)
 
     findings = _mock_llm_call(
         system_prompt="",
