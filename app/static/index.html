@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Review Console</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --line: #d9dee7;
+      --text: #1f2937;
+      --muted: #667085;
+      --accent: #0f766e;
+      --accent-dark: #115e59;
+      --danger: #b42318;
+      --warning: #b54708;
+      --ok: #027a48;
+      --code: #111827;
+      --soft: #eef6f5;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      width: min(1320px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 18px 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: var(--soft);
+      color: var(--accent-dark);
+      font-weight: 800;
+      border: 1px solid #c6e1dd;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 750;
+    }
+
+    .sub {
+      margin: 1px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 32px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--muted);
+    }
+
+    .dot.ok { background: var(--ok); }
+    .dot.warn { background: var(--warning); }
+    .dot.bad { background: var(--danger); }
+
+    main {
+      width: min(1320px, calc(100vw - 32px));
+      margin: 18px auto 32px;
+      display: grid;
+      grid-template-columns: minmax(360px, 520px) minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-width: 0;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 750;
+    }
+
+    .body {
+      padding: 16px;
+    }
+
+    label {
+      display: block;
+      margin: 0 0 6px;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    input, textarea {
+      width: 100%;
+      border: 1px solid #cfd6e2;
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      outline: none;
+    }
+
+    input {
+      height: 38px;
+      padding: 0 10px;
+    }
+
+    textarea {
+      min-height: 360px;
+      resize: vertical;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--code);
+    }
+
+    input:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 1px solid transparent;
+      border-radius: 6px;
+      height: 38px;
+      padding: 0 13px;
+      font: inherit;
+      font-weight: 750;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+    }
+
+    button:hover {
+      background: var(--accent-dark);
+    }
+
+    button.secondary {
+      background: #fff;
+      color: var(--text);
+      border-color: var(--line);
+    }
+
+    button.secondary:hover {
+      background: #f8fafc;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfe;
+      min-height: 72px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 22px;
+      line-height: 1.1;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--line);
+      padding: 0 12px;
+      gap: 4px;
+    }
+
+    .tab {
+      height: 40px;
+      padding: 0 12px;
+      background: transparent;
+      color: var(--muted);
+      border: 0;
+      border-radius: 0;
+      border-bottom: 2px solid transparent;
+    }
+
+    .tab:hover {
+      background: transparent;
+      color: var(--text);
+    }
+
+    .tab.active {
+      color: var(--accent-dark);
+      border-bottom-color: var(--accent);
+    }
+
+    .panel {
+      display: none;
+      padding: 16px;
+    }
+
+    .panel.active {
+      display: block;
+    }
+
+    .report {
+      max-height: 640px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--code);
+      background: #fbfcfe;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 12px;
+    }
+
+    .findings {
+      display: grid;
+      gap: 10px;
+      max-height: 640px;
+      overflow: auto;
+    }
+
+    .finding {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+    }
+
+    .finding-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .finding h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .severity {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      background: #eef2f6;
+      color: #344054;
+      white-space: nowrap;
+    }
+
+    .severity.critical, .severity.high {
+      background: #fef3f2;
+      color: var(--danger);
+    }
+
+    .severity.medium {
+      background: #fffaeb;
+      color: var(--warning);
+    }
+
+    .severity.low {
+      background: #ecfdf3;
+      color: var(--ok);
+    }
+
+    .meta {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .finding p {
+      margin: 10px 0 0;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    }
+
+    .empty {
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      padding: 24px;
+      text-align: center;
+      background: #fbfcfe;
+    }
+
+    .toast {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      min-height: 42px;
+    }
+
+    .toast.error {
+      background: #fef3f2;
+      border-color: #fecdca;
+      color: var(--danger);
+    }
+
+    .toast.ok {
+      background: #ecfdf3;
+      border-color: #abefc6;
+      color: var(--ok);
+    }
+
+    @media (max-width: 960px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      .summary {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 560px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .grid-2,
+      .summary {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div class="brand">
+        <div class="mark">AR</div>
+        <div>
+          <h1>Agent Review Console</h1>
+          <p class="sub">FastAPI / LangGraph / SQLAlchemy</p>
+        </div>
+      </div>
+      <div class="status-pill" id="healthPill"><span class="dot" id="healthDot"></span><span id="healthText">checking</span></div>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="section-head">
+        <h2>Review Input</h2>
+      </div>
+      <div class="body">
+        <div class="grid-2">
+          <div>
+            <label for="repoName">Repo name</label>
+            <input id="repoName" value="local-demo">
+          </div>
+          <div>
+            <label for="sourceType">Source type</label>
+            <input id="sourceType" value="ui">
+          </div>
+        </div>
+
+        <label for="diffText">Git diff</label>
+        <textarea id="diffText" spellcheck="false"></textarea>
+
+        <div class="actions">
+          <button id="submitBtn" type="button">Run Review</button>
+          <button id="sampleBtn" class="secondary" type="button">Load Sample</button>
+          <button id="clearBtn" class="secondary" type="button">Clear</button>
+        </div>
+
+        <div class="toast" id="message">Ready.</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Review Result</h2>
+        <div class="status-pill"><span class="dot" id="taskDot"></span><span id="taskStatus">idle</span></div>
+      </div>
+      <div class="body">
+        <div class="summary">
+          <div class="metric"><strong id="totalCount">0</strong><span>Total</span></div>
+          <div class="metric"><strong id="blockingCount">0</strong><span>Blocking</span></div>
+          <div class="metric"><strong id="highCount">0</strong><span>High/Critical</span></div>
+          <div class="metric"><strong id="testsCount">0</strong><span>Draft tests</span></div>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" type="button" data-tab="findingsPanel">Findings</button>
+        <button class="tab" type="button" data-tab="markdownPanel">Markdown</button>
+        <button class="tab" type="button" data-tab="jsonPanel">JSON</button>
+      </div>
+
+      <div class="panel active" id="findingsPanel">
+        <div class="empty" id="findingsEmpty">No findings yet.</div>
+        <div class="findings" id="findingsList"></div>
+      </div>
+      <div class="panel" id="markdownPanel">
+        <div class="report" id="markdownReport">No report yet.</div>
+      </div>
+      <div class="panel" id="jsonPanel">
+        <pre class="report" id="jsonReport">No JSON yet.</pre>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const sampleDiff = `diff --git a/app/demo.py b/app/demo.py
+index 1111111..2222222 100644
+--- a/app/demo.py
++++ b/app/demo.py
+@@ -1,2 +1,7 @@
+ def handler(user):
++    query = f"SELECT * FROM users WHERE name = '{user}'"
++    # TODO tighten auth
++    try:
++        pass
++    except Exception:
++        pass
+     return user
+`;
+
+    const state = {
+      taskId: null,
+      pollTimer: null,
+    };
+
+    const els = {
+      healthDot: document.getElementById("healthDot"),
+      healthText: document.getElementById("healthText"),
+      repoName: document.getElementById("repoName"),
+      sourceType: document.getElementById("sourceType"),
+      diffText: document.getElementById("diffText"),
+      submitBtn: document.getElementById("submitBtn"),
+      sampleBtn: document.getElementById("sampleBtn"),
+      clearBtn: document.getElementById("clearBtn"),
+      message: document.getElementById("message"),
+      taskDot: document.getElementById("taskDot"),
+      taskStatus: document.getElementById("taskStatus"),
+      totalCount: document.getElementById("totalCount"),
+      blockingCount: document.getElementById("blockingCount"),
+      highCount: document.getElementById("highCount"),
+      testsCount: document.getElementById("testsCount"),
+      findingsEmpty: document.getElementById("findingsEmpty"),
+      findingsList: document.getElementById("findingsList"),
+      markdownReport: document.getElementById("markdownReport"),
+      jsonReport: document.getElementById("jsonReport"),
+    };
+
+    function setMessage(text, type = "") {
+      els.message.className = `toast ${type}`.trim();
+      els.message.textContent = text;
+    }
+
+    function setTaskStatus(status) {
+      els.taskStatus.textContent = status;
+      els.taskDot.className = "dot";
+      if (status === "completed") els.taskDot.classList.add("ok");
+      if (status === "running" || status === "pending") els.taskDot.classList.add("warn");
+      if (status === "failed") els.taskDot.classList.add("bad");
+    }
+
+    function stopPolling() {
+      if (state.pollTimer) {
+        clearInterval(state.pollTimer);
+        state.pollTimer = null;
+      }
+    }
+
+    async function checkHealth() {
+      try {
+        const response = await fetch("/health");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        els.healthDot.className = "dot ok";
+        els.healthText.textContent = "api online";
+      } catch (error) {
+        els.healthDot.className = "dot bad";
+        els.healthText.textContent = "api offline";
+      }
+    }
+
+    async function runReview() {
+      const diffText = els.diffText.value.trim();
+      if (!diffText) {
+        setMessage("Please paste or load a diff first.", "error");
+        return;
+      }
+
+      stopPolling();
+      resetResult();
+      els.submitBtn.disabled = true;
+      setTaskStatus("submitting");
+      setMessage("Submitting review task...");
+
+      try {
+        const response = await fetch("/api/reviews", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            source_type: els.sourceType.value.trim() || "ui",
+            repo_name: els.repoName.value.trim() || "local-demo",
+            diff_text: diffText,
+            changed_files: [],
+          }),
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(text || `HTTP ${response.status}`);
+        }
+
+        const created = await response.json();
+        state.taskId = created.task_id;
+        setTaskStatus(created.status);
+        setMessage(`Task ${state.taskId} created. Polling result...`, "ok");
+        state.pollTimer = setInterval(pollTask, 900);
+        await pollTask();
+      } catch (error) {
+        setTaskStatus("failed");
+        setMessage(`Submit failed: ${error.message}`, "error");
+      } finally {
+        els.submitBtn.disabled = false;
+      }
+    }
+
+    async function pollTask() {
+      if (!state.taskId) return;
+
+      try {
+        const statusResponse = await fetch(`/api/reviews/${state.taskId}`);
+        if (!statusResponse.ok) throw new Error(`status HTTP ${statusResponse.status}`);
+        const status = await statusResponse.json();
+        setTaskStatus(status.status);
+
+        if (status.status === "pending" || status.status === "running") {
+          setMessage(`Task ${state.taskId}: ${status.current_stage || status.status}`);
+          return;
+        }
+
+        stopPolling();
+
+        const reportResponse = await fetch(`/api/reviews/${state.taskId}/report`);
+        if (!reportResponse.ok) {
+          const text = await reportResponse.text();
+          throw new Error(text || `report HTTP ${reportResponse.status}`);
+        }
+        const report = await reportResponse.json();
+        renderReport(report);
+        setMessage(`Task ${state.taskId} completed.`, "ok");
+      } catch (error) {
+        stopPolling();
+        setTaskStatus("failed");
+        setMessage(`Polling failed: ${error.message}`, "error");
+      }
+    }
+
+    function resetResult() {
+      els.totalCount.textContent = "0";
+      els.blockingCount.textContent = "0";
+      els.highCount.textContent = "0";
+      els.testsCount.textContent = "0";
+      els.findingsList.innerHTML = "";
+      els.findingsEmpty.style.display = "block";
+      els.markdownReport.textContent = "No report yet.";
+      els.jsonReport.textContent = "No JSON yet.";
+    }
+
+    function renderReport(report) {
+      const json = report.json_report || {};
+      const findings = json.findings || [];
+      const generatedTests = report.generated_tests || json.generated_tests || [];
+      const highOrCritical = findings.filter((f) => f.severity === "high" || f.severity === "critical").length;
+
+      els.totalCount.textContent = json.total_findings ?? findings.length;
+      els.blockingCount.textContent = json.blocking_count ?? findings.filter((f) => f.blocking).length;
+      els.highCount.textContent = highOrCritical;
+      els.testsCount.textContent = generatedTests.length;
+      els.markdownReport.textContent = report.markdown_report || "No Markdown report.";
+      els.jsonReport.textContent = JSON.stringify(report, null, 2);
+
+      els.findingsList.innerHTML = "";
+      els.findingsEmpty.style.display = findings.length ? "none" : "block";
+
+      for (const finding of findings) {
+        const item = document.createElement("article");
+        item.className = "finding";
+        const severity = String(finding.severity || "low").toLowerCase();
+        item.innerHTML = `
+          <div class="finding-head">
+            <h3>${escapeHtml(finding.title || "Untitled finding")}</h3>
+            <span class="severity ${escapeHtml(severity)}">${escapeHtml(severity)}</span>
+          </div>
+          <div class="meta">
+            <code>${escapeHtml(finding.file_path || "N/A")}:${escapeHtml(String(finding.line_number || "N/A"))}</code>
+            · ${escapeHtml(finding.category || "uncategorized")}
+            · confidence ${Math.round(Number(finding.confidence || 0) * 100)}%
+          </div>
+          <p>${escapeHtml(finding.description || "")}</p>
+          ${finding.evidence ? `<p><strong>Evidence:</strong> <code>${escapeHtml(finding.evidence)}</code></p>` : ""}
+          ${finding.suggestion ? `<p><strong>Suggestion:</strong> ${escapeHtml(finding.suggestion)}</p>` : ""}
+        `;
+        els.findingsList.appendChild(item);
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    document.querySelectorAll(".tab").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("active"));
+        document.querySelectorAll(".panel").forEach((panel) => panel.classList.remove("active"));
+        button.classList.add("active");
+        document.getElementById(button.dataset.tab).classList.add("active");
+      });
+    });
+
+    els.submitBtn.addEventListener("click", runReview);
+    els.sampleBtn.addEventListener("click", () => {
+      els.diffText.value = sampleDiff;
+      setMessage("Sample diff loaded.", "ok");
+    });
+    els.clearBtn.addEventListener("click", () => {
+      stopPolling();
+      els.diffText.value = "";
+      state.taskId = null;
+      setTaskStatus("idle");
+      resetResult();
+      setMessage("Ready.");
+    });
+
+    els.diffText.value = sampleDiff;
+    checkHealth();
+  </script>
+</body>
+</html>
