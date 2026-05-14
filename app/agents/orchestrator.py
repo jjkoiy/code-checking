@@ -1,113 +1,274 @@
-"""
-LangGraph Orchestrator — placeholder for P0.
-
-In a future phase this will be replaced with a real StateGraph that sequences:
-ContextBuilder → [StaticAnalysis, StyleCheck, SecurityScan, TestImpact]
-→ FindingAggregator → LLMReview → TestGeneration → Validation → Report.
-"""
+"""LangGraph Orchestrator — builds and runs the multi-agent review pipeline."""
 
 from __future__ import annotations
 
+import json
 import logging
+import traceback
 from typing import Optional
 
+from langgraph.graph import StateGraph, END
+
 from app.models.state import ReviewState
+from app.agents import context_builder, static_analysis, style_check
+from app.agents import security_scan, finding_aggregator, llm_review
+from app.agents import test_impact, test_generation, validation, report
 
 logger = logging.getLogger(__name__)
 
 
+# ── Node functions ────────────────────────────────────────────────
+
+def _context_builder_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: context_builder")
+    state["status"] = "context_building"
+    try:
+        ctx = context_builder.build_context(
+            diff_text=state.get("diff_text", ""),
+            changed_files=state.get("changed_files", []),
+        )
+        state["project_context"] = ctx
+        state["changed_files"] = context_builder.parse_diff(state.get("diff_text", "")) or state.get("changed_files", [])
+        state["status"] = "context_ready"
+    except Exception as e:
+        logger.error("Context builder failed: %s", e)
+        state["errors"].append({"agent": "context_builder", "error": str(e)})
+        state["status"] = "context_error"
+    return state
+
+
+def _static_analysis_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: static_analysis")
+    state["status"] = "static_analysis"
+    try:
+        findings = static_analysis.analyze(
+            diff_text=state.get("diff_text", ""),
+            changed_files=state.get("changed_files", []),
+        )
+        state["static_findings"] = findings
+    except Exception as e:
+        logger.error("Static analysis failed: %s", e)
+        state["errors"].append({"agent": "static_analysis", "error": str(e)})
+        state["static_findings"] = []
+    return state
+
+
+def _style_check_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: style_check")
+    state["status"] = "style_check"
+    try:
+        findings = style_check.check(
+            changed_files=state.get("changed_files", []),
+            diff_text=state.get("diff_text", ""),
+        )
+        state["style_findings"] = findings
+    except Exception as e:
+        logger.error("Style check failed: %s", e)
+        state["errors"].append({"agent": "style_check", "error": str(e)})
+        state["style_findings"] = []
+    return state
+
+
+def _security_scan_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: security_scan")
+    state["status"] = "security_scan"
+    try:
+        findings = security_scan.scan(
+            diff_text=state.get("diff_text", ""),
+            changed_files=state.get("changed_files", []),
+        )
+        state["security_findings"] = findings
+    except Exception as e:
+        logger.error("Security scan failed: %s", e)
+        state["errors"].append({"agent": "security_scan", "error": str(e)})
+        state["security_findings"] = []
+    return state
+
+
+def _test_impact_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: test_impact")
+    state["status"] = "test_impact"
+    try:
+        result = test_impact.analyze(
+            changed_files=state.get("changed_files", []),
+            diff_text=state.get("diff_text", ""),
+        )
+        state["test_impact"] = result
+    except Exception as e:
+        logger.error("Test impact analysis failed: %s", e)
+        state["errors"].append({"agent": "test_impact", "error": str(e)})
+        state["test_impact"] = {}
+    return state
+
+
+def _finding_aggregator_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: aggregating")
+    state["status"] = "aggregating"
+    try:
+        all_raw = (
+            state.get("static_findings", [])
+            + state.get("style_findings", [])
+            + state.get("security_findings", [])
+        )
+        aggregated = finding_aggregator.aggregate(all_raw)
+        state["aggregated_findings"] = aggregated
+    except Exception as e:
+        logger.error("Aggregator failed: %s", e)
+        state["errors"].append({"agent": "finding_aggregator", "error": str(e)})
+        state["aggregated_findings"] = []
+    return state
+
+
+def _llm_review_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: llm_review")
+    state["status"] = "llm_review"
+    try:
+        findings = llm_review.review(
+            diff_text=state.get("diff_text", ""),
+            changed_files=state.get("changed_files", []),
+            aggregated_findings=state.get("aggregated_findings", []),
+            project_context=state.get("project_context", {}),
+        )
+        state["llm_findings"] = findings
+    except Exception as e:
+        logger.error("LLM review failed: %s", e)
+        state["errors"].append({"agent": "llm_review", "error": str(e)})
+        state["llm_findings"] = []
+    return state
+
+
+def _test_generation_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: test_generation (P2 stub)")
+    state["status"] = "test_generation"
+    try:
+        result = test_generation.generate(
+            changed_files=state.get("changed_files", []),
+            aggregated_findings=state.get("aggregated_findings", []),
+            llm_findings=state.get("llm_findings", []),
+            test_impact=state.get("test_impact", {}),
+        )
+        state["test_generation_result"] = result
+    except Exception as e:
+        logger.error("Test generation failed: %s", e)
+        state["errors"].append({"agent": "test_generation", "error": str(e)})
+        state["test_generation_result"] = {}
+    return state
+
+
+def _validation_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: validation (P2 stub)")
+    state["status"] = "validation"
+    try:
+        result = validation.validate(
+            generated_tests=state.get("test_generation_result", {}),
+        )
+        state["validation_result"] = result
+    except Exception as e:
+        logger.error("Validation failed: %s", e)
+        state["errors"].append({"agent": "validation", "error": str(e)})
+        state["validation_result"] = {"status": "not_run", "errors": []}
+    return state
+
+
+def _report_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: report")
+    state["status"] = "report_generating"
+    try:
+        result = report.generate(
+            aggregated_findings=state.get("aggregated_findings", []),
+            llm_findings=state.get("llm_findings", []),
+            test_generation_result=state.get("test_generation_result", {}),
+            validation_result=state.get("validation_result", {}),
+        )
+        state["final_report"] = result
+        state["status"] = "completed"
+    except Exception as e:
+        logger.error("Report generation failed: %s", e)
+        state["errors"].append({"agent": "report", "error": str(e)})
+        state["status"] = "failed"
+        state["final_report"] = {
+            "summary": f"Report generation failed: {e}",
+            "markdown_report": f"# Error\n\nReport generation failed: {e}",
+            "json_report": {"error": str(e)},
+        }
+    return state
+
+
+# ── Conditional routing ───────────────────────────────────────────
+
+def _should_run_security(state: ReviewState) -> str:
+    return "security_scan"
+
+
+# ── Graph construction ────────────────────────────────────────────
+
 def build_review_graph():
-    """Placeholder — returns None for now, real LangGraph graph in P1+."""
-    logger.info("LangGraph orchestrator not yet implemented — using sequential fallback.")
-    return None
+    """Build and compile the LangGraph StateGraph for the review pipeline.
+
+    Flow (P1, sequential — parallel analysis deferred to later phase):
+        context_builder → static_analysis → style_check → security_scan
+        → test_impact → finding_aggregator → llm_review
+        → test_generation (P2 stub) → validation (P2 stub) → report
+    """
+    graph = StateGraph(ReviewState)
+
+    graph.add_node("context_builder", _context_builder_node)
+    graph.add_node("static_analysis", _static_analysis_node)
+    graph.add_node("style_check", _style_check_node)
+    graph.add_node("security_scan", _security_scan_node)
+    graph.add_node("test_impact", _test_impact_node)
+    graph.add_node("finding_aggregator", _finding_aggregator_node)
+    graph.add_node("llm_review", _llm_review_node)
+    graph.add_node("test_generation", _test_generation_node)
+    graph.add_node("validation", _validation_node)
+    graph.add_node("report", _report_node)
+
+    graph.set_entry_point("context_builder")
+
+    # Sequential chain for P1 (avoids concurrent-write reducer complexity)
+    graph.add_edge("context_builder", "static_analysis")
+    graph.add_edge("static_analysis", "style_check")
+    graph.add_edge("style_check", "security_scan")
+    graph.add_edge("security_scan", "test_impact")
+    graph.add_edge("test_impact", "finding_aggregator")
+    graph.add_edge("finding_aggregator", "llm_review")
+    graph.add_edge("llm_review", "test_generation")
+    graph.add_edge("test_generation", "validation")
+    graph.add_edge("validation", "report")
+    graph.add_edge("report", END)
+
+    return graph.compile()
+
+
+# ── Entry point ───────────────────────────────────────────────────
+
+_graph = None
+
+
+def _get_graph():
+    global _graph
+    if _graph is None:
+        _graph = build_review_graph()
+    return _graph
 
 
 def run_review_pipeline(task_id: str, state: ReviewState) -> dict:
-    """
-    Sequential no-op pipeline for P0.
-    Each step is a stub that passes state through unchanged.
-    Returns a placeholder final report dict.
-    """
-    logger.info("Starting review pipeline for task=%s (no-op stubs)", task_id)
+    """Run the full review pipeline via LangGraph. Returns the final report dict."""
+    state["task_id"] = task_id
+    if "errors" not in state:
+        state["errors"] = []
 
-    _context_builder(state)
-    _static_analysis(state)
-    _style_check(state)
-    _security_scan(state)
-    _test_impact(state)
-    _finding_aggregator(state)
-    _llm_review(state)
-    _test_generation(state)
-    _validation(state)
-    report = _report(state)
-
-    logger.info("Review pipeline completed for task=%s", task_id)
-    return report
-
-
-# ── Stub node implementations ───────────────────────────────────
-
-def _context_builder(state: ReviewState) -> None:
-    state["status"] = "context_building"
-    state["project_context"] = {}
-    # TODO: implement parse diff, detect language, retrieve from Chroma
-
-
-def _static_analysis(state: ReviewState) -> None:
-    state["status"] = "static_analysis"
-    state["static_findings"] = []
-    # TODO: implement AST/regex/linter analysis
-
-
-def _style_check(state: ReviewState) -> None:
-    state["status"] = "style_check"
-    state["style_findings"] = []
-    # TODO: implement naming/style checks
-
-
-def _security_scan(state: ReviewState) -> None:
-    state["status"] = "security_scan"
-    state["security_findings"] = []
-    # TODO: implement security pattern scanning
-
-
-def _test_impact(state: ReviewState) -> None:
-    state["status"] = "test_impact"
-    state["test_impact"] = {}
-    # TODO: implement test impact analysis
-
-
-def _finding_aggregator(state: ReviewState) -> None:
-    state["status"] = "aggregating"
-    state["aggregated_findings"] = []
-    # TODO: implement dedup + severity normalization
-
-
-def _llm_review(state: ReviewState) -> None:
-    state["status"] = "llm_review"
-    state["llm_findings"] = []
-    # TODO: implement LLM deep review
-
-
-def _test_generation(state: ReviewState) -> None:
-    state["status"] = "test_generation"
-    state["test_generation_result"] = {}
-    # TODO: implement test generation
-
-
-def _validation(state: ReviewState) -> None:
-    state["status"] = "validation"
-    state["validation_result"] = {"status": "not_run", "errors": []}
-    # TODO: implement test validation
-
-
-def _report(state: ReviewState) -> dict:
-    state["status"] = "report_generating"
-    placeholder_report = {
-        "summary": "P0 placeholder — no real analysis performed.",
-        "markdown_report": "# Review Report\n\n*No analysis available in P0 mode.*",
-        "json_report": {"findings": [], "tests": []},
-    }
-    state["final_report"] = placeholder_report
-    state["status"] = "completed"
-    return placeholder_report
+    logger.info("Starting review pipeline for task=%s", task_id)
+    try:
+        graph = _get_graph()
+        final_state = graph.invoke(state)
+        logger.info("Pipeline completed for task=%s, status=%s", task_id, final_state.get("status"))
+        return final_state.get("final_report", {})
+    except Exception as e:
+        logger.error("Pipeline execution failed for task=%s: %s", task_id, e)
+        traceback.print_exc()
+        return {
+            "summary": f"Pipeline execution failed: {e}",
+            "markdown_report": f"# Error\n\nPipeline execution failed: {e}",
+            "json_report": {"error": str(e)},
+        }

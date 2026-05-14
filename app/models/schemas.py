@@ -40,3 +40,11 @@ class ReviewStatusResponse(BaseModel):
     error_message: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class ReviewReportResponse(BaseModel):
+    task_id: str
+    status: str
+    summary: Optional[str] = None
+    markdown_report: Optional[str] = None
+    json_report: Optional[dict] = None

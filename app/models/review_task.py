@@ -29,5 +29,8 @@ class ReviewTask(Base):
     status = Column(String, nullable=False, default="pending")
     current_stage = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
+    findings_json = Column(Text, nullable=True)
+    report_json = Column(Text, nullable=True)
+    report_markdown = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)

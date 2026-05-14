@@ -16,4 +16,5 @@ Base = declarative_base()
 
 
 def init_db() -> None:
+    import app.models.review_task  # noqa: F401 — ensure ORM model is registered
     Base.metadata.create_all(bind=engine)
