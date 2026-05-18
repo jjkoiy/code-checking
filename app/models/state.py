@@ -26,6 +26,7 @@ class ReviewState(TypedDict, total=False):
     current_stage: str
     on_stage_start: Any
     on_stage_end: Any
+    pipeline_started_at: float
 
     source_type: str
     repo_path: Optional[str]

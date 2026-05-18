@@ -32,6 +32,18 @@ def _python_test_code(test_name: str, file_path: str, risk: str) -> str:
     )
 
 
+def _unique_test_name(base_name: str, used_names: set[str]) -> str:
+    if base_name not in used_names:
+        used_names.add(base_name)
+        return base_name
+    suffix = 2
+    while f"{base_name}_{suffix}" in used_names:
+        suffix += 1
+    name = f"{base_name}_{suffix}"
+    used_names.add(name)
+    return name
+
+
 def generate(
     changed_files: list[dict],
     aggregated_findings: list[dict],
@@ -43,18 +55,20 @@ def generate(
     high_risk = [f for f in findings if f.get("severity") in {"high", "critical"}]
     test_plan: list[dict] = []
     generated_tests: list[dict] = []
+    used_names: set[str] = set()
 
     for item in test_impact.get("new_tests_needed", []):
         file_path = item.get("file_path", "")
         test_types = item.get("suggested_test_types") or test_impact.get("recommended_test_types", ["unit"])
         risk = item.get("reason", "Changed behavior needs regression coverage.")
         for test_type in test_types:
-            name = _default_test_name(file_path, test_type)
+            name = _unique_test_name(_default_test_name(file_path, test_type), used_names)
             test_plan.append({
                 "name": name,
                 "test_type": test_type,
                 "target_file": file_path,
                 "risk_covered": risk,
+                "generation_status": "draft",
             })
             generated_tests.append({
                 "name": name,
@@ -64,17 +78,32 @@ def generate(
                 "framework": "pytest",
                 "code": _python_test_code(name, file_path, risk),
                 "executed": False,
+                "generation_status": "draft",
             })
 
     for finding in high_risk:
         file_path = finding.get("file_path") or "unknown"
-        name = _default_test_name(file_path, "finding")
+        name = _unique_test_name(_default_test_name(file_path, "finding"), used_names)
         risk = finding.get("title", "High-risk finding")
         test_plan.append({
             "name": name,
             "test_type": "regression",
             "target_file": file_path,
             "risk_covered": risk,
+            "source_finding_id": finding.get("id"),
+            "generation_status": "draft",
+        })
+        generated_tests.append({
+            "name": name,
+            "target_file": file_path,
+            "test_type": "regression",
+            "language": "python",
+            "framework": "pytest",
+            "code": _python_test_code(name, file_path, risk),
+            "executed": False,
+            "source_finding_id": finding.get("id"),
+            "source_finding_title": risk,
+            "generation_status": "draft",
         })
 
     if not external_llm_enabled():

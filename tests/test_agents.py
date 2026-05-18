@@ -124,6 +124,48 @@ def test_test_generation_skips_call_llm_when_external_llm_is_disabled(monkeypatc
     assert result["generated_tests"][0]["executed"] is False
 
 
+def test_test_generation_creates_draft_for_each_high_risk_finding(monkeypatch) -> None:
+    monkeypatch.setattr(test_generation.settings, "llm_provider", "mock")
+    monkeypatch.setattr(test_generation.settings, "llm_api_key", "")
+
+    result = test_generation.generate(
+        changed_files=[{"file_path": "app/demo.py", "language": "python"}],
+        aggregated_findings=[
+            {
+                "id": "finding-1",
+                "agent_name": "security_agent",
+                "severity": "critical",
+                "category": "security",
+                "file_path": "app/demo.py",
+                "line_number": 3,
+                "title": "Potential command injection",
+                "description": "shell=True is dangerous.",
+                "confidence": 0.9,
+            },
+            {
+                "id": "finding-2",
+                "agent_name": "static_analysis_agent",
+                "severity": "high",
+                "category": "bug",
+                "file_path": "app/demo.py",
+                "line_number": 4,
+                "title": "High-risk regression",
+                "description": "Important behavior changed.",
+                "confidence": 0.8,
+            },
+        ],
+        llm_findings=[],
+        test_impact={},
+    )
+
+    finding_drafts = [
+        test for test in result["generated_tests"]
+        if test.get("source_finding_id") in {"finding-1", "finding-2"}
+    ]
+    assert len(finding_drafts) == 2
+    assert all(test["generation_status"] == "draft" for test in finding_drafts)
+
+
 def test_llm_review_redacts_sensitive_values_before_external_call(monkeypatch) -> None:
     captured = {}
 
@@ -309,6 +351,50 @@ def test_report_uses_plain_ok_text_for_empty_review() -> None:
 
     assert "[OK] No issues found in this review." in result["markdown_report"]
     assert result["json_report"]["llm_mode"] == "mock"
+
+
+def test_report_includes_metadata_and_review_scope() -> None:
+    result = report.generate(
+        [],
+        [],
+        {},
+        {},
+        metadata={
+            "agent_count": 10,
+            "duration_seconds": 0.12,
+            "llm_mode": "mock",
+            "pipeline_status": "completed",
+        },
+        review_scope={
+            "file_count": 2,
+            "languages": ["python"],
+            "mode": "added_lines_only",
+            "added_lines": 7,
+            "has_reviewable_content": True,
+        },
+    )
+
+    assert result["json_report"]["metadata"]["agent_count"] == 10
+    assert result["json_report"]["review_scope"]["file_count"] == 2
+    assert "## Review Scope" in result["markdown_report"]
+
+
+def test_report_distinguishes_no_reviewable_content() -> None:
+    result = report.generate(
+        [],
+        [],
+        {},
+        {},
+        review_scope={
+            "file_count": 0,
+            "languages": [],
+            "mode": "added_lines_only",
+            "added_lines": 0,
+            "has_reviewable_content": False,
+        },
+    )
+
+    assert "[WARN] No reviewable content was available" in result["markdown_report"]
 
 
 def test_report_severity_counts_exclude_blocking_findings() -> None:

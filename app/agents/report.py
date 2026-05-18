@@ -41,13 +41,31 @@ def _format_finding_md(f: dict) -> str:
     return "\n".join(lines)
 
 
+def _format_languages(languages: list[str]) -> str:
+    return ", ".join(sorted(language for language in languages if language)) or "unknown"
+
+
 def generate(aggregated_findings: list[dict], llm_findings: list[dict],
              test_generation_result: dict, validation_result: dict,
              llm_mode: str = "mock",
-             validation_warnings: list[dict] | None = None) -> dict:
+             validation_warnings: list[dict] | None = None,
+             metadata: dict | None = None,
+             review_scope: dict | None = None) -> dict:
     """Generate Markdown and JSON report from final normalized findings."""
     all_findings = list(aggregated_findings)
     validation_warnings = validation_warnings or []
+    metadata = metadata or {
+        "agent_count": 0,
+        "duration_seconds": None,
+        "llm_mode": llm_mode,
+        "pipeline_status": "completed",
+    }
+    review_scope = review_scope or {
+        "file_count": 0,
+        "languages": [],
+        "mode": "added_lines_only",
+        "has_reviewable_content": True,
+    }
 
     # Categorize
     blocking = [f for f in all_findings if f.get("blocking")]
@@ -73,6 +91,13 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         summary,
         "",
         f"- **LLM mode**: `{llm_mode}`",
+        "",
+        "## Review Scope",
+        "",
+        f"- **Files**: {review_scope.get('file_count', 0)}",
+        f"- **Languages**: {_format_languages(review_scope.get('languages', []))}",
+        f"- **Mode**: {review_scope.get('mode', 'added_lines_only')}",
+        f"- **Added lines**: {review_scope.get('added_lines', 'unknown')}",
         "",
         "---",
         "",
@@ -119,7 +144,10 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         md.append("")
 
     if not all_findings:
-        md.append("[OK] No issues found in this review.")
+        if review_scope.get("has_reviewable_content", True):
+            md.append("[OK] No issues found in this review.")
+        else:
+            md.append("[WARN] No reviewable content was available for this review.")
         md.append("")
 
     # Test generation summary
@@ -177,6 +205,8 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
 
     json_report = {
         "summary": summary,
+        "metadata": metadata,
+        "review_scope": review_scope,
         "llm_mode": llm_mode,
         "total_findings": total,
         "blocking_count": len(blocking),

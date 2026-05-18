@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import traceback
 from typing import Callable, Optional
 
@@ -16,6 +17,19 @@ from app.agents import test_impact, test_generation, validation, report
 from app.services.llm_safety import llm_mode
 
 logger = logging.getLogger(__name__)
+
+_PIPELINE_STAGES = [
+    "context_builder",
+    "static_analysis",
+    "style_check",
+    "security_scan",
+    "test_impact",
+    "finding_aggregator",
+    "llm_review",
+    "test_generation",
+    "validation",
+    "report",
+]
 
 StageCallback = Callable[[str, ReviewState], None]
 
@@ -31,6 +45,43 @@ def _notify_stage_end(state: ReviewState, stage: str) -> None:
     callback = state.get("on_stage_end")
     if callable(callback):
         callback(stage, state)
+
+
+def _review_scope(state: ReviewState) -> dict:
+    changed_files = state.get("changed_files", [])
+    languages = sorted({
+        changed.get("language")
+        for changed in changed_files
+        if changed.get("language")
+    })
+    added_lines = sum(
+        int(changed.get("added_lines", 0) or 0)
+        for changed in changed_files
+    )
+    has_content = bool(state.get("diff_text", "").strip()) or any(
+        changed.get("content") and str(changed.get("content")).strip()
+        for changed in changed_files
+    )
+    return {
+        "file_count": len(changed_files),
+        "languages": languages,
+        "mode": "added_lines_only",
+        "added_lines": added_lines,
+        "has_reviewable_content": has_content,
+    }
+
+
+def _report_metadata(state: ReviewState) -> dict:
+    started_at = state.get("pipeline_started_at")
+    duration_seconds = None
+    if isinstance(started_at, float):
+        duration_seconds = round(time.perf_counter() - started_at, 3)
+    return {
+        "agent_count": len(_PIPELINE_STAGES),
+        "duration_seconds": duration_seconds,
+        "llm_mode": state.get("llm_mode", llm_mode()),
+        "pipeline_status": "failed" if state.get("errors") else "completed",
+    }
 
 
 def _merge_changed_files(existing: list[dict], parsed: list[dict]) -> list[dict]:
@@ -260,6 +311,8 @@ def _report_node(state: ReviewState) -> ReviewState:
             validation_result=state.get("validation_result", {}),
             llm_mode=state.get("llm_mode", llm_mode()),
             validation_warnings=state.get("validation_warnings", []),
+            metadata=_report_metadata(state),
+            review_scope=_review_scope(state),
         )
         if state.get("errors"):
             result.setdefault("json_report", {})["error"] = "One or more review stages failed."
@@ -351,6 +404,7 @@ def run_review_pipeline(
     state["task_id"] = task_id
     if "errors" not in state:
         state["errors"] = []
+    state["pipeline_started_at"] = time.perf_counter()
     if on_stage_start:
         state["on_stage_start"] = on_stage_start
     if on_stage_end:
