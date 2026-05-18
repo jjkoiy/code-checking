@@ -96,6 +96,52 @@ def test_static_security_and_style_scan_changed_file_content_without_diff() -> N
     )
 
 
+def test_static_analysis_ast_ignores_exception_text_in_comments() -> None:
+    changed_files = [{
+        "file_path": "app/demo.py",
+        "language": "python",
+        "content": "\n".join([
+            "def handler():",
+            "    # except Exception: this is documentation",
+            "    return 1",
+        ]),
+    }]
+
+    findings = static_analysis.analyze("", changed_files)
+
+    assert not any(finding["title"] == "Broad exception caught" for finding in findings)
+
+
+def test_static_analysis_ast_allows_open_context_manager() -> None:
+    changed_files = [{
+        "file_path": "app/demo.py",
+        "language": "python",
+        "content": "\n".join([
+            "def read_file(path):",
+            "    with open(path) as handle:",
+            "        return handle.read()",
+        ]),
+    }]
+
+    findings = static_analysis.analyze("", changed_files)
+
+    assert not any(finding["title"] == "Open without context manager" for finding in findings)
+
+
+def test_static_analysis_ast_keeps_diff_snippet_fallback() -> None:
+    diff_text = """diff --git a/app/demo.py b/app/demo.py
+--- a/app/demo.py
++++ b/app/demo.py
+@@ -1 +1,2 @@
++    # except Exception in a comment should stay quiet once full files are used
++    except Exception:
+"""
+
+    findings = static_analysis.analyze(diff_text, [{"file_path": "app/demo.py", "language": "python"}])
+
+    assert any(finding["title"] == "Broad exception caught" for finding in findings)
+
+
 def test_llm_review_uses_local_mock_when_provider_is_mock(monkeypatch, risky_python_diff: str) -> None:
     monkeypatch.setattr(llm_review.settings, "llm_provider", "mock")
     monkeypatch.setattr(llm_review.settings, "llm_api_key", "")
