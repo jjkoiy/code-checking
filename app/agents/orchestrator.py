@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import traceback
-from typing import Optional
+from typing import Callable, Optional
 
 from langgraph.graph import StateGraph, END
 
@@ -16,6 +16,21 @@ from app.agents import test_impact, test_generation, validation, report
 from app.services.llm_safety import llm_mode
 
 logger = logging.getLogger(__name__)
+
+StageCallback = Callable[[str, ReviewState], None]
+
+
+def _notify_stage_start(state: ReviewState, stage: str) -> None:
+    state["current_stage"] = stage
+    callback = state.get("on_stage_start")
+    if callable(callback):
+        callback(stage, state)
+
+
+def _notify_stage_end(state: ReviewState, stage: str) -> None:
+    callback = state.get("on_stage_end")
+    if callable(callback):
+        callback(stage, state)
 
 
 def _merge_changed_files(existing: list[dict], parsed: list[dict]) -> list[dict]:
@@ -45,6 +60,7 @@ def _merge_changed_files(existing: list[dict], parsed: list[dict]) -> list[dict]
 def _context_builder_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: context_builder")
     state["status"] = "context_building"
+    _notify_stage_start(state, "context_builder")
     try:
         state["changed_files"] = _merge_changed_files(
             existing=state.get("changed_files", []),
@@ -60,12 +76,15 @@ def _context_builder_node(state: ReviewState) -> ReviewState:
         logger.error("Context builder failed: %s", e)
         state["errors"].append({"agent": "context_builder", "error": str(e)})
         state["status"] = "context_error"
+    finally:
+        _notify_stage_end(state, "context_builder")
     return state
 
 
 def _static_analysis_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: static_analysis")
     state["status"] = "static_analysis"
+    _notify_stage_start(state, "static_analysis")
     try:
         findings = static_analysis.analyze(
             diff_text=state.get("diff_text", ""),
@@ -76,12 +95,15 @@ def _static_analysis_node(state: ReviewState) -> ReviewState:
         logger.error("Static analysis failed: %s", e)
         state["errors"].append({"agent": "static_analysis", "error": str(e)})
         state["static_findings"] = []
+    finally:
+        _notify_stage_end(state, "static_analysis")
     return state
 
 
 def _style_check_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: style_check")
     state["status"] = "style_check"
+    _notify_stage_start(state, "style_check")
     try:
         findings = style_check.check(
             changed_files=state.get("changed_files", []),
@@ -92,12 +114,15 @@ def _style_check_node(state: ReviewState) -> ReviewState:
         logger.error("Style check failed: %s", e)
         state["errors"].append({"agent": "style_check", "error": str(e)})
         state["style_findings"] = []
+    finally:
+        _notify_stage_end(state, "style_check")
     return state
 
 
 def _security_scan_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: security_scan")
     state["status"] = "security_scan"
+    _notify_stage_start(state, "security_scan")
     try:
         findings = security_scan.scan(
             diff_text=state.get("diff_text", ""),
@@ -108,12 +133,15 @@ def _security_scan_node(state: ReviewState) -> ReviewState:
         logger.error("Security scan failed: %s", e)
         state["errors"].append({"agent": "security_scan", "error": str(e)})
         state["security_findings"] = []
+    finally:
+        _notify_stage_end(state, "security_scan")
     return state
 
 
 def _test_impact_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: test_impact")
     state["status"] = "test_impact"
+    _notify_stage_start(state, "test_impact")
     try:
         result = test_impact.analyze(
             changed_files=state.get("changed_files", []),
@@ -124,12 +152,15 @@ def _test_impact_node(state: ReviewState) -> ReviewState:
         logger.error("Test impact analysis failed: %s", e)
         state["errors"].append({"agent": "test_impact", "error": str(e)})
         state["test_impact"] = {}
+    finally:
+        _notify_stage_end(state, "test_impact")
     return state
 
 
 def _finding_aggregator_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: aggregating")
     state["status"] = "aggregating"
+    _notify_stage_start(state, "finding_aggregator")
     try:
         validation_warnings = state.setdefault("validation_warnings", [])
         all_raw = (
@@ -146,6 +177,8 @@ def _finding_aggregator_node(state: ReviewState) -> ReviewState:
         logger.error("Aggregator failed: %s", e)
         state["errors"].append({"agent": "finding_aggregator", "error": str(e)})
         state["aggregated_findings"] = []
+    finally:
+        _notify_stage_end(state, "finding_aggregator")
     return state
 
 
@@ -153,6 +186,7 @@ def _llm_review_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: llm_review")
     state["status"] = "llm_review"
     state["llm_mode"] = llm_mode()
+    _notify_stage_start(state, "llm_review")
     try:
         findings = llm_review.review(
             diff_text=state.get("diff_text", ""),
@@ -170,12 +204,15 @@ def _llm_review_node(state: ReviewState) -> ReviewState:
         logger.error("LLM review failed: %s", e)
         state["errors"].append({"agent": "llm_review", "error": str(e)})
         state["llm_findings"] = []
+    finally:
+        _notify_stage_end(state, "llm_review")
     return state
 
 
 def _test_generation_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: test_generation")
     state["status"] = "test_generation"
+    _notify_stage_start(state, "test_generation")
     try:
         result = test_generation.generate(
             changed_files=state.get("changed_files", []),
@@ -188,12 +225,15 @@ def _test_generation_node(state: ReviewState) -> ReviewState:
         logger.error("Test generation failed: %s", e)
         state["errors"].append({"agent": "test_generation", "error": str(e)})
         state["test_generation_result"] = {}
+    finally:
+        _notify_stage_end(state, "test_generation")
     return state
 
 
 def _validation_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: validation")
     state["status"] = "validation"
+    _notify_stage_start(state, "validation")
     try:
         result = validation.validate(
             generated_tests=state.get("test_generation_result", {}),
@@ -203,12 +243,15 @@ def _validation_node(state: ReviewState) -> ReviewState:
         logger.error("Validation failed: %s", e)
         state["errors"].append({"agent": "validation", "error": str(e)})
         state["validation_result"] = {"status": "not_run", "errors": []}
+    finally:
+        _notify_stage_end(state, "validation")
     return state
 
 
 def _report_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: report")
     state["status"] = "report_generating"
+    _notify_stage_start(state, "report")
     try:
         result = report.generate(
             aggregated_findings=state.get("aggregated_findings", []),
@@ -235,6 +278,8 @@ def _report_node(state: ReviewState) -> ReviewState:
             "markdown_report": f"# Error\n\nReport generation failed: {e}",
             "json_report": {"error": str(e)},
         }
+    finally:
+        _notify_stage_end(state, "report")
     return state
 
 
@@ -296,11 +341,20 @@ def _get_graph():
     return _graph
 
 
-def run_review_pipeline(task_id: str, state: ReviewState) -> dict:
+def run_review_pipeline(
+    task_id: str,
+    state: ReviewState,
+    on_stage_start: StageCallback | None = None,
+    on_stage_end: StageCallback | None = None,
+) -> dict:
     """Run the full review pipeline via LangGraph. Returns the final report dict."""
     state["task_id"] = task_id
     if "errors" not in state:
         state["errors"] = []
+    if on_stage_start:
+        state["on_stage_start"] = on_stage_start
+    if on_stage_end:
+        state["on_stage_end"] = on_stage_end
 
     logger.info("Starting review pipeline for task=%s", task_id)
     try:

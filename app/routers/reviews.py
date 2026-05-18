@@ -26,6 +26,26 @@ def _run_pipeline_background(task_id: str) -> None:
         logger.error("Background pipeline failed for task=%s: %s", task_id, e)
 
 
+def _load_report_json(raw_report: str | None) -> dict | None:
+    if not raw_report:
+        return None
+    try:
+        loaded = json.loads(raw_report)
+    except json.JSONDecodeError:
+        return {"raw": raw_report}
+    return loaded if isinstance(loaded, dict) else {"raw": loaded}
+
+
+def _failed_report_json(error_message: str | None, json_report: dict | None) -> dict:
+    if json_report is not None:
+        return json_report
+    message = error_message or "Unknown error"
+    return {
+        "summary": "Review failed before a complete report could be generated.",
+        "pipeline_errors": [message],
+    }
+
+
 @router.post("", response_model=CreateReviewResponse, status_code=201)
 def create_review_endpoint(
     req: CreateReviewRequest,
@@ -74,14 +94,17 @@ def get_review_report(task_id: str) -> ReviewReportResponse:
         )
 
     if task.status == "failed":
-        raise HTTPException(status_code=500, detail="Review failed: " + (task.error_message or "Unknown error"))
+        json_report = _failed_report_json(task.error_message, _load_report_json(task.report_json))
+        return ReviewReportResponse(
+            task_id=task.id,
+            status=task.status,
+            summary=json_report.get("summary", task.error_message),
+            markdown_report=task.report_markdown,
+            json_report=json_report,
+            generated_tests=json_report.get("generated_tests", []),
+        )
 
-    json_report = None
-    if task.report_json:
-        try:
-            json_report = json.loads(task.report_json)
-        except json.JSONDecodeError:
-            json_report = {"raw": task.report_json}
+    json_report = _load_report_json(task.report_json)
 
     return ReviewReportResponse(
         task_id=task.id,

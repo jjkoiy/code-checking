@@ -23,6 +23,9 @@ class Finding(TypedDict, total=False):
 class ReviewState(TypedDict, total=False):
     task_id: str
     status: str
+    current_stage: str
+    on_stage_start: Any
+    on_stage_end: Any
 
     source_type: str
     repo_path: Optional[str]

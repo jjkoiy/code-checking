@@ -17,8 +17,17 @@ def test_run_review_and_save_persists_completed_report(monkeypatch, tmp_path) ->
     Base.metadata.create_all(bind=engine)
     monkeypatch.setattr(review_service, "SessionLocal", TestingSessionLocal)
 
-    def fake_pipeline(task_id: str, state: dict) -> dict:
+    def fake_pipeline(task_id: str, state: dict, **kwargs) -> dict:
         assert state["changed_files"][0]["content"] == "print('hello')"
+        on_stage_start = kwargs.get("on_stage_start")
+        if on_stage_start:
+            on_stage_start("static_analysis", state)
+            check_db = TestingSessionLocal()
+            try:
+                saved_task = check_db.query(review_service.ReviewTask).filter_by(id=task_id).first()
+                assert saved_task.current_stage == "static_analysis"
+            finally:
+                check_db.close()
         return {
             "markdown_report": "# OK",
             "json_report": {
@@ -38,7 +47,13 @@ def test_run_review_and_save_persists_completed_report(monkeypatch, tmp_path) ->
 
     task = review_service.create_review(
         CreateReviewRequest(
-            diff_text="diff --git a/app/demo.py b/app/demo.py\n+print('hello')\n",
+            diff_text=(
+                "diff --git a/app/demo.py b/app/demo.py\n"
+                "--- a/app/demo.py\n"
+                "+++ b/app/demo.py\n"
+                "@@ -1 +1 @@\n"
+                "+print('hello')\n"
+            ),
             changed_files=[{
                 "file_path": "app/demo.py",
                 "language": "python",

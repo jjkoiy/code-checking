@@ -76,6 +76,18 @@ def save_report(db: Session, task: ReviewTask, markdown_report: str, json_report
     return {"report_id": task.id, "saved": True}
 
 
+def _latest_pipeline_error(state: dict) -> str | None:
+    errors = state.get("errors") or []
+    if not errors:
+        return None
+    latest = errors[-1]
+    if isinstance(latest, dict):
+        agent = latest.get("agent", "unknown")
+        error = latest.get("error", "")
+        return f"{agent}: {error}" if error else str(latest)
+    return str(latest)
+
+
 def run_review_and_save(task_id: str) -> ReviewTask:
     """Run the agent pipeline for a task and persist results synchronously."""
     from app.agents.orchestrator import run_review_pipeline
@@ -118,12 +130,30 @@ def run_review_and_save(task_id: str) -> ReviewTask:
             "llm_mode": "mock",
             "test_generation_result": {},
             "validation_result": {},
+            "validation_warnings": [],
             "final_report": {},
             "retry_count": {},
             "errors": [],
         }
 
-        report_result = run_review_pipeline(task_id, state)
+        def persist_stage(stage: str, stage_state: ReviewState) -> None:
+            task.current_stage = stage
+            latest_error = _latest_pipeline_error(stage_state)
+            if latest_error:
+                task.error_message = latest_error
+            task.updated_at = _utcnow()
+            try:
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                logger.warning("Failed to persist stage=%s for task=%s: %s", stage, task_id, exc)
+
+        report_result = run_review_pipeline(
+            task_id,
+            state,
+            on_stage_start=persist_stage,
+            on_stage_end=persist_stage,
+        )
         json_report = report_result.get("json_report", {})
         pipeline_error = json_report.get("error") if isinstance(json_report, dict) else None
 
