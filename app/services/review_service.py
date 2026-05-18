@@ -115,6 +115,7 @@ def run_review_and_save(task_id: str) -> ReviewTask:
             "test_impact": {},
             "aggregated_findings": [],
             "llm_findings": [],
+            "llm_mode": "mock",
             "test_generation_result": {},
             "validation_result": {},
             "final_report": {},

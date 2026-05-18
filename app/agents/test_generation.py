@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.services.llm_client import call_llm
+from app.services.llm_safety import external_llm_enabled, llm_mode, redact_text
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +77,20 @@ def generate(
             "risk_covered": risk,
         })
 
+    if not external_llm_enabled():
+        logger.info("Test generation LLM enhancement skipped in %s mode.", llm_mode())
+        logger.info("Generated %d draft test(s).", len(generated_tests))
+        return {
+            "test_plan": test_plan,
+            "generated_tests": generated_tests,
+            "notes": ["Generated tests are drafts and were not executed by the agent."],
+        }
+
     try:
         response = call_llm(
             model=settings.llm_model,
             system_prompt=TEST_GENERATION_SYSTEM_PROMPT,
-            user_prompt=json.dumps({
+            user_prompt=redact_text(json.dumps({
                 "changed_files": changed_files,
                 "findings": findings,
                 "test_impact": test_impact,
@@ -88,7 +98,7 @@ def generate(
                     "test_plan": test_plan,
                     "generated_tests": generated_tests,
                 },
-            }),
+            })),
             response_format="json",
         )
         parsed = response.get("parsed_json")

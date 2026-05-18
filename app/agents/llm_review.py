@@ -6,7 +6,9 @@ import logging
 import json
 
 from app.config import settings
+from app.agents.diff_utils import added_text_by_file, is_code_file
 from app.services.llm_client import call_llm
+from app.services.llm_safety import external_llm_enabled, llm_mode, redact_text
 
 logger = logging.getLogger(__name__)
 
@@ -16,87 +18,139 @@ Each Finding must include agent_name, severity, category, file_path, line_number
 description, evidence, suggestion, confidence. Only report issues supported by the diff."""
 
 
-def _mock_llm_call(system_prompt: str, user_prompt: str) -> list[dict]:
+def _reviewable_changes(diff_text: str, changed_files: list[dict]) -> list[dict]:
+    """Collect actual changed code lines for heuristic review."""
+    languages_by_file = {
+        f.get("file_path"): f.get("language")
+        for f in changed_files
+        if f.get("file_path")
+    }
+    changes: list[dict] = []
+
+    fallback_file_path = next(
+        (f.get("file_path") for f in changed_files if f.get("file_path")),
+        None,
+    )
+    for file_path, (added_text, line_numbers) in added_text_by_file(
+        diff_text,
+        fallback_file_path=fallback_file_path,
+        allow_raw=True,
+    ).items():
+        if is_code_file(file_path, languages_by_file.get(file_path)):
+            for line_number, line_text in zip(line_numbers, added_text.splitlines()):
+                changes.append({
+                    "file_path": file_path,
+                    "line_number": line_number,
+                    "text": line_text,
+                })
+
+    for changed in changed_files:
+        file_path = changed.get("file_path")
+        content = changed.get("content")
+        if not content or not is_code_file(file_path, changed.get("language")):
+            continue
+        if not any(item["file_path"] == file_path for item in changes):
+            for line_number, line_text in enumerate(content.splitlines(), start=1):
+                changes.append({
+                    "file_path": file_path,
+                    "line_number": line_number,
+                    "text": line_text,
+                })
+
+    return changes
+
+
+def _reviewable_text(changes: list[dict]) -> tuple[str, list[str]]:
+    file_paths = sorted({item["file_path"] for item in changes if item.get("file_path")})
+    snippets: list[str] = []
+    for file_path in file_paths:
+        lines = [
+            f"{item['line_number']}: {item['text']}"
+            for item in changes
+            if item.get("file_path") == file_path
+        ]
+        snippets.append(f"File: {file_path}\n" + "\n".join(lines))
+    return "\n\n".join(snippets), file_paths
+
+
+def _mock_llm_call(changes: list[dict]) -> list[dict]:
     """Simulate LLM review findings based on input heuristics.
     In production this will be replaced with a real LLM API call via app.config.llm_provider/model.
     """
-    combined = (user_prompt + " " + system_prompt).lower()
     findings: list[dict] = []
+    seen_categories: set[str] = set()
 
-    logic_keywords = ["auth", "login", "logout", "permission", "role", "access control"]
-    if any(kw in combined for kw in logic_keywords):
+    def add_finding(change: dict, severity: str, category: str, title: str,
+                    description: str, suggestion: str, confidence: float) -> None:
+        if category in seen_categories:
+            return
+        seen_categories.add(category)
         findings.append({
             "agent_name": "llm_review_agent",
-            "severity": "medium",
-            "category": "logic",
-            "file_path": None,
-            "line_number": None,
-            "title": "Authentication flow may need review",
-            "description": "Changes touch authentication-related code. Verify that auth checks are applied consistently across all affected endpoints.",
-            "evidence": "Auth-related keywords detected in changed files.",
-            "suggestion": "Ensure every protected endpoint has an auth dependency and that role checks are applied before business logic.",
-            "confidence": 0.55,
+            "severity": severity,
+            "category": category,
+            "file_path": change["file_path"],
+            "line_number": change["line_number"],
+            "title": title,
+            "description": description,
+            "evidence": change["text"].strip(),
+            "suggestion": suggestion,
+            "confidence": confidence,
         })
 
-    error_keywords = ["except", "error", "raise", "try", "catch", "fallback"]
-    if any(kw in combined for kw in error_keywords):
-        findings.append({
-            "agent_name": "llm_review_agent",
-            "severity": "low",
-            "category": "reliability",
-            "file_path": None,
-            "line_number": None,
-            "title": "Error handling should be reviewed for completeness",
-            "description": "Error handling patterns detected. Verify that exceptions are translated appropriately at API boundaries and that users get actionable error messages.",
-            "evidence": "Exception/error handling keywords found in diff.",
-            "suggestion": "Map internal exceptions to appropriate HTTP status codes. Avoid leaking stack traces to API consumers.",
-            "confidence": 0.45,
-        })
+    rules = [
+        (
+            "logic",
+            ["auth", "login", "logout", "permission", "role", "access control"],
+            "medium",
+            "Authentication-related change needs targeted review",
+            "This changed line touches authentication or authorization behavior.",
+            "Verify this specific path enforces the intended auth and role checks before business logic runs.",
+            0.58,
+        ),
+        (
+            "reliability",
+            ["except", "error", "raise", "try", "catch", "fallback"],
+            "low",
+            "Error handling path needs targeted review",
+            "This changed line affects exception or fallback behavior.",
+            "Confirm the error is handled at the right boundary and returns an actionable, non-leaky response.",
+            0.48,
+        ),
+        (
+            "data",
+            ["sql", "query", "database", "db", "session", "commit", "rollback", "transaction"],
+            "medium",
+            "Database interaction needs targeted review",
+            "This changed line touches database or transaction behavior.",
+            "Check transaction boundaries, rollback behavior, and whether user-controlled values are safely parameterized.",
+            0.52,
+        ),
+        (
+            "compatibility",
+            ["api", "endpoint", "router", "route", "request", "response", "status_code"],
+            "medium",
+            "API surface change needs targeted review",
+            "This changed line appears to affect the API contract.",
+            "Verify request and response compatibility, including status codes and schema changes.",
+            0.50,
+        ),
+        (
+            "validation",
+            ["input", "user", "body", "param", "json", "form", "query_param"],
+            "low",
+            "Input handling needs targeted validation review",
+            "This changed line handles user-controlled input.",
+            "Add or verify validators for empty, malformed, oversized, and unexpected inputs.",
+            0.48,
+        ),
+    ]
 
-    db_keywords = ["sql", "query", "database", "db", "session", "commit", "rollback", "transaction"]
-    if any(kw in combined for kw in db_keywords):
-        findings.append({
-            "agent_name": "llm_review_agent",
-            "severity": "medium",
-            "category": "reliability",
-            "file_path": None,
-            "line_number": None,
-            "title": "Database session/transaction management should be verified",
-            "description": "Database operations detected. Verify that sessions are properly closed and transactions are committed or rolled back on error.",
-            "evidence": "Database-related keywords found in diff.",
-            "suggestion": "Use context managers for DB sessions. Ensure rollback on exceptions and commit only on success.",
-            "confidence": 0.50,
-        })
-
-    api_keywords = ["api", "endpoint", "router", "route", "request", "response", "status_code"]
-    if any(kw in combined for kw in api_keywords):
-        findings.append({
-            "agent_name": "llm_review_agent",
-            "severity": "medium",
-            "category": "compatibility",
-            "file_path": None,
-            "line_number": None,
-            "title": "API compatibility should be checked",
-            "description": "Changes affect API surface. Verify backward compatibility and that request/response schemas haven't broken existing consumers.",
-            "evidence": "API-related keywords detected in changed files.",
-            "suggestion": "Review all changed endpoints for backward compatibility. Consider API versioning if breaking changes are intentional.",
-            "confidence": 0.50,
-        })
-
-    input_keywords = ["input", "user", "body", "param", "json", "form", "query_param"]
-    if any(kw in combined for kw in input_keywords):
-        findings.append({
-            "agent_name": "llm_review_agent",
-            "severity": "low",
-            "category": "reliability",
-            "file_path": None,
-            "line_number": None,
-            "title": "Input validation should be comprehensive",
-            "description": "User input handling detected. Verify that all inputs are validated with appropriate Pydantic models or manual checks.",
-            "evidence": "Input-handling keywords found in diff.",
-            "suggestion": "Add Pydantic validators for business rules. Check for edge cases: empty strings, oversized inputs, unexpected types.",
-            "confidence": 0.45,
-        })
+    for change in changes:
+        line = change["text"].lower()
+        for category, keywords, severity, title, description, suggestion, confidence in rules:
+            if category not in seen_categories and any(kw in line for kw in keywords):
+                add_finding(change, severity, category, title, description, suggestion, confidence)
 
     logger.info("Mock LLM review produced %d finding(s).", len(findings))
     return findings
@@ -105,36 +159,37 @@ def _mock_llm_call(system_prompt: str, user_prompt: str) -> list[dict]:
 def review(diff_text: str, changed_files: list[dict],
            aggregated_findings: list[dict], project_context: dict) -> list[dict]:
     """Run LLM deep review (mock in P1). Returns list of Finding dicts."""
-    if not diff_text and not changed_files:
+    changes = _reviewable_changes(diff_text, changed_files)
+    review_text, file_paths = _reviewable_text(changes)
+    if not review_text.strip():
         return []
 
     # Build a prompt that summarizes what we're reviewing (used by mock heuristics)
-    file_paths = [f.get("file_path", "") for f in changed_files]
     combined_context = (
         f"Files: {' '.join(file_paths)}. "
         f"Languages: {project_context.get('languages', [])}. "
-        f"Risk hints: {project_context.get('risk_hints', [])}. "
-        f"Diff length: {len(diff_text)} chars."
+        f"Changed code length: {len(review_text)} chars."
     )
 
     user_prompt = json.dumps({
-        "diff_text": diff_text[: settings.review_max_diff_chars],
-        "changed_files": changed_files,
+        "changed_code": review_text[: settings.review_max_diff_chars],
+        "changed_files": [
+            f for f in changed_files
+            if is_code_file(f.get("file_path"), f.get("language"))
+        ],
         "aggregated_findings": aggregated_findings,
-        "project_context": project_context,
     })
 
-    if settings.llm_provider == "mock" or not settings.llm_api_key:
-        return _mock_llm_call(
-            system_prompt="",
-            user_prompt=user_prompt + " " + combined_context,
-        )
+    mode = llm_mode()
+    if not external_llm_enabled():
+        logger.info("LLM review running in %s mode.", mode)
+        return _mock_llm_call(changes)
 
     try:
         response = call_llm(
             model=settings.llm_model,
             system_prompt=LLM_REVIEW_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
+            user_prompt=redact_text(user_prompt),
             response_format="json",
         )
         parsed = response.get("parsed_json")
@@ -147,9 +202,6 @@ def review(diff_text: str, changed_files: list[dict],
     except Exception as e:
         logger.warning("LLM review fell back to mock heuristics: %s", e)
 
-    findings = _mock_llm_call(
-        system_prompt="",
-        user_prompt=" ".join(file_paths) + " " + combined_context,
-    )
+    findings = _mock_llm_call(changes)
 
     return findings

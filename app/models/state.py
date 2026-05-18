@@ -39,6 +39,7 @@ class ReviewState(TypedDict, total=False):
 
     aggregated_findings: List[Finding]
     llm_findings: List[Finding]
+    llm_mode: str
 
     test_generation_result: Dict[str, Any]
     validation_result: Dict[str, Any]

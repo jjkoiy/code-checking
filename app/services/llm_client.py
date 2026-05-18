@@ -11,6 +11,8 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+OPENAI_COMPATIBLE_PROVIDERS = {"openai", "deepseek"}
+
 
 @dataclass
 class LLMResponse:
@@ -37,11 +39,11 @@ class LLMClient:
         temperature: float = 0.2,
         model: str | None = None,
     ) -> LLMResponse:
-        if self.provider == "mock" or not self.api_key:
+        if self.provider == "mock" or not self.api_key or not settings.llm_external_enabled:
             logger.info("LLM client running in mock mode; provider=%s model=%s", self.provider, self.model)
             return LLMResponse(content="[]", parsed_json=[])
 
-        if self.provider != "openai":
+        if self.provider not in OPENAI_COMPATIBLE_PROVIDERS:
             raise ValueError(f"Unsupported LLM_PROVIDER: {self.provider}")
 
         payload: dict[str, Any] = {

@@ -13,6 +13,7 @@ from app.models.state import ReviewState
 from app.agents import context_builder, static_analysis, style_check
 from app.agents import security_scan, finding_aggregator, llm_review
 from app.agents import test_impact, test_generation, validation, report
+from app.services.llm_safety import llm_mode
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,7 @@ def _finding_aggregator_node(state: ReviewState) -> ReviewState:
 def _llm_review_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: llm_review")
     state["status"] = "llm_review"
+    state["llm_mode"] = llm_mode()
     try:
         findings = llm_review.review(
             diff_text=state.get("diff_text", ""),
@@ -204,6 +206,7 @@ def _report_node(state: ReviewState) -> ReviewState:
             llm_findings=state.get("llm_findings", []),
             test_generation_result=state.get("test_generation_result", {}),
             validation_result=state.get("validation_result", {}),
+            llm_mode=state.get("llm_mode", llm_mode()),
         )
         if state.get("errors"):
             result.setdefault("json_report", {})["error"] = "One or more review stages failed."
