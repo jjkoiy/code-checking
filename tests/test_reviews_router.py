@@ -4,8 +4,6 @@ import json
 from types import SimpleNamespace
 from datetime import datetime, timezone
 
-from fastapi import BackgroundTasks
-
 from app.models import CreateReviewRequest
 from app.routers import reviews
 
@@ -75,7 +73,7 @@ def test_create_review_endpoint_dispatches_task(monkeypatch) -> None:
     monkeypatch.setattr(
         reviews,
         "dispatch_review_task",
-        lambda background, task_id: dispatched.setdefault("task_id", task_id),
+        lambda task_id: dispatched.setdefault("task_id", task_id),
     )
 
     response = reviews.create_review_endpoint(
@@ -88,7 +86,6 @@ def test_create_review_endpoint_dispatches_task(monkeypatch) -> None:
                 "+print('hello')\n"
             ),
         ),
-        BackgroundTasks(),
     )
 
     assert response.task_id == "task-4"
@@ -99,7 +96,7 @@ def test_create_review_endpoint_does_not_dispatch_failed_input(monkeypatch) -> N
     task = SimpleNamespace(id="task-5", status="failed")
     monkeypatch.setattr(reviews, "create_review", lambda req: task)
 
-    def fail_dispatch(background, task_id):
+    def fail_dispatch(task_id):
         raise AssertionError("failed input tasks should not be dispatched")
 
     monkeypatch.setattr(reviews, "dispatch_review_task", fail_dispatch)
@@ -110,7 +107,6 @@ def test_create_review_endpoint_does_not_dispatch_failed_input(monkeypatch) -> N
             repo_name="owner/repo",
             pull_request_number=5,
         ),
-        BackgroundTasks(),
     )
 
     assert response.task_id == "task-5"

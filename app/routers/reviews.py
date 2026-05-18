@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException
 
 from app.models import (
     CreateReviewRequest,
@@ -43,12 +43,11 @@ def _failed_report_json(error_message: str | None, json_report: dict | None) -> 
 @router.post("", response_model=CreateReviewResponse, status_code=201)
 def create_review_endpoint(
     req: CreateReviewRequest,
-    background: BackgroundTasks,
 ) -> CreateReviewResponse:
     task = create_review(req)
     if task.status == "pending":
         logger.info("Created review task: %s, dispatching pipeline.", task.id)
-        dispatch_review_task(background, task.id)
+        dispatch_review_task(task.id)
     else:
         logger.info("Created review task: %s with status=%s.", task.id, task.status)
 

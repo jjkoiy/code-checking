@@ -19,6 +19,10 @@ pip install -r requirements.txt
 # Run the FastAPI dev server
 uvicorn app.main:app --reload --port 8000
 
+# Run a Celery worker for review execution
+# Requires Redis at REDIS_URL, for example redis://localhost:6379/0
+celery -A app.worker.celery_app worker --pool=solo -l info
+
 # Open the local web console after the server starts
 # http://127.0.0.1:8000/
 
@@ -43,8 +47,8 @@ Notes:
 ```text
 POST /api/reviews
   -> create ReviewTask in DB with status=pending
-  -> schedule background review pipeline
-  -> run agents sequentially
+  -> enqueue durable Celery review task through Redis
+  -> worker runs agents sequentially
   -> save findings_json, report_json, report_markdown
   -> set task status to completed or failed
 
@@ -259,7 +263,7 @@ Run:
 Last verified result:
 
 ```text
-41 passed
+64 passed
 ```
 
 ## Docker
@@ -277,7 +281,7 @@ For persistent SQLite and Chroma data, mount a volume for `/app/data`.
 
 - No authentication, authorization, rate limiting, or tenant isolation yet.
 - Input size limits are enforced by request schemas, but API/server-level body limits are not configured yet.
-- FastAPI `BackgroundTasks` is not a durable job queue. Long-running production use should move to a real worker system.
+- Review execution now uses Celery and Redis, but there is no task administration UI or dead-letter workflow yet.
 - `current_stage` is persisted through stage callbacks, but there is still no durable job history table.
 - LLM output is normalized before final reporting, but external LLM behavior still needs stronger production policy and observability.
 - Diff or source content may contain secrets; external LLM calls are gated and redacted by default, but production deployments should still review policy and audit requirements.

@@ -36,6 +36,10 @@ def _env_bool(key: str, default: bool = False) -> bool:
 class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/app.db")
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    celery_task_soft_time_limit_seconds: int = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT_SECONDS", "600"))
+    celery_task_time_limit_seconds: int = int(os.getenv("CELERY_TASK_TIME_LIMIT_SECONDS", "660"))
+    celery_task_max_retries: int = int(os.getenv("CELERY_TASK_MAX_RETRIES", "2"))
     llm_provider: str = os.getenv("LLM_PROVIDER", "mock")
     llm_model: str = os.getenv("LLM_MODEL", "mock-reviewer")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
