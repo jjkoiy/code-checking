@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from app.models.report import ReportGenerationResultModel, ReviewReportModel
+
 logger = logging.getLogger(__name__)
 
 _SEVERITY_ICON = {
@@ -281,7 +283,7 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
 
     markdown_report = "\n".join(md)
 
-    json_report = {
+    json_report = ReviewReportModel.model_validate({
         "summary": summary,
         "metadata": metadata,
         "review_scope": review_scope,
@@ -299,11 +301,11 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         "generated_tests": generated_tests,
         "validation_result": validation_result,
         "validation_warnings": validation_warnings,
-    }
+    }).model_dump()
 
     logger.info("Report generated: %d findings.", total)
-    return {
+    return ReportGenerationResultModel.model_validate({
         "summary": summary,
         "markdown_report": markdown_report,
         "json_report": json_report,
-    }
+    }).model_dump()

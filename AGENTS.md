@@ -110,6 +110,7 @@ Each node reads and updates `ReviewState`. If a node records an error, the final
 | `app/database.py` | SQLAlchemy engine/session/Base and schema initialization |
 | `app/models/review_task.py` | `ReviewTask` ORM model |
 | `app/models/findings.py` | Pydantic finding validation and normalization helpers |
+| `app/models/report.py` | Pydantic report payload models |
 | `app/models/schemas.py` | Pydantic request/response schemas |
 | `app/models/state.py` | `ReviewState` and `Finding` TypedDicts |
 | `app/routers/reviews.py` | Review task API routes |
@@ -267,7 +268,7 @@ Run:
 Last verified result:
 
 ```text
-69 passed
+71 passed
 ```
 
 ## Docker
