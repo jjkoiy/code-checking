@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import logging
 
-from app.agents.diff_utils import added_text_by_file, detect_language, is_code_file
+from app.agents.diff_utils import detect_language, is_code_file, review_text_by_file
 
 logger = logging.getLogger(__name__)
 
@@ -122,20 +122,9 @@ def _find_diff_lines(diff_text: str) -> set[int]:
 
 def scan(diff_text: str, changed_files: list[dict]) -> list[dict]:
     """Scan diff text for security vulnerabilities. Returns list of Finding dicts."""
-    if not diff_text:
-        return []
-
     findings: list[dict] = []
-    fallback_file_path = next(
-        (f.get("file_path") for f in changed_files if f.get("file_path")),
-        None,
-    )
-    added_by_file = added_text_by_file(
-        diff_text,
-        fallback_file_path=fallback_file_path,
-        allow_raw=True,
-    )
-    if not added_by_file:
+    review_text = review_text_by_file(diff_text, changed_files)
+    if not review_text:
         return findings
     languages_by_file = {
         f.get("file_path"): f.get("language")
@@ -144,7 +133,7 @@ def scan(diff_text: str, changed_files: list[dict]) -> list[dict]:
     }
 
     for check in _CHECKS:
-        for file_path, (added_text, line_numbers) in added_by_file.items():
+        for file_path, (added_text, line_numbers) in review_text.items():
             language = languages_by_file.get(file_path) or detect_language(file_path)
             if not is_code_file(file_path, language):
                 continue

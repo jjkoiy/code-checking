@@ -59,6 +59,43 @@ def test_static_security_and_style_findings_include_file_and_line(risky_python_d
     ]
 
 
+def test_static_security_and_style_scan_changed_file_content_without_diff() -> None:
+    changed_files = [
+        {
+            "file_path": "app/demo.py",
+            "language": "python",
+            "content": "\n".join([
+                "def handler(user):",
+                "    # TODO tighten auth",
+                "    query = f\"SELECT * FROM users WHERE name = '{user}'\"",
+                "    return query",
+            ]),
+        }
+    ]
+
+    static_findings = static_analysis.analyze("", changed_files)
+    security_findings = security_scan.scan("", changed_files)
+    style_findings = style_check.check(changed_files, "")
+
+    assert any(
+        finding["title"] == "SQL string concatenation / interpolation"
+        and finding["file_path"] == "app/demo.py"
+        and finding["line_number"] == 3
+        for finding in static_findings
+    )
+    assert any(
+        finding["title"] == "Potential SQL injection via f-string"
+        and finding["file_path"] == "app/demo.py"
+        and finding["line_number"] == 3
+        for finding in security_findings
+    )
+    assert any(
+        finding["title"] == "TODO/FIXME left in code"
+        and finding["line_number"] == 2
+        for finding in style_findings
+    )
+
+
 def test_llm_review_uses_local_mock_when_provider_is_mock(monkeypatch, risky_python_diff: str) -> None:
     monkeypatch.setattr(llm_review.settings, "llm_provider", "mock")
     monkeypatch.setattr(llm_review.settings, "llm_api_key", "")

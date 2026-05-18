@@ -173,3 +173,35 @@ def added_text_by_file(
         list(range(start_index + 1, start_index + len(raw_lines) + 1)),
     )
     return result
+
+
+def review_text_by_file(
+    diff_text: str,
+    changed_files: list[dict],
+    allow_raw_diff: bool = True,
+) -> dict[str, tuple[str, list[int]]]:
+    """Return reviewable text from diff added lines, or raw changed file content."""
+    fallback_file_path = next(
+        (f.get("file_path") for f in changed_files if f.get("file_path")),
+        None,
+    )
+    added = added_text_by_file(
+        diff_text,
+        fallback_file_path=fallback_file_path,
+        allow_raw=allow_raw_diff,
+    )
+    if added:
+        return added
+
+    result: dict[str, tuple[str, list[int]]] = {}
+    for changed in changed_files:
+        file_path = changed.get("file_path")
+        content = changed.get("content")
+        if not file_path or not isinstance(content, str) or not content.strip():
+            continue
+        lines = content.splitlines()
+        result[file_path] = (
+            "\n".join(lines),
+            list(range(1, len(lines) + 1)),
+        )
+    return result
