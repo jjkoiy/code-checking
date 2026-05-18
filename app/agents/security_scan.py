@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import logging
 
-from app.agents.diff_utils import added_text_by_file
+from app.agents.diff_utils import added_text_by_file, detect_language, is_code_file
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +51,8 @@ _CHECKS: list[dict] = [
         "title": "Potential command injection",
         "severity": "critical",
         "pattern": re.compile(
-            r"(?:os\.system|subprocess\.(?:call|run|Popen)|shell\s*=\s*True)",
-            re.MULTILINE,
+            r"(?:\bos\.system\s*\(|\bsubprocess\.(?:call|run|Popen)\s*\([^)]*\bshell\s*=\s*True\b|\bshell\s*=\s*True\b)",
+            re.MULTILINE | re.DOTALL,
         ),
         "description": "Shell command execution with user-controlled input may allow command injection.",
         "attack_scenario": "An attacker could inject shell metacharacters (;, |, &&, $()) to execute arbitrary commands.",
@@ -126,12 +126,28 @@ def scan(diff_text: str, changed_files: list[dict]) -> list[dict]:
         return []
 
     findings: list[dict] = []
-    added_by_file = added_text_by_file(diff_text)
+    fallback_file_path = next(
+        (f.get("file_path") for f in changed_files if f.get("file_path")),
+        None,
+    )
+    added_by_file = added_text_by_file(
+        diff_text,
+        fallback_file_path=fallback_file_path,
+        allow_raw=True,
+    )
     if not added_by_file:
         return findings
+    languages_by_file = {
+        f.get("file_path"): f.get("language")
+        for f in changed_files
+        if f.get("file_path")
+    }
 
     for check in _CHECKS:
         for file_path, (added_text, line_numbers) in added_by_file.items():
+            language = languages_by_file.get(file_path) or detect_language(file_path)
+            if not is_code_file(file_path, language):
+                continue
             for m in check["pattern"].finditer(added_text):
                 added_index = _line_number(added_text, m.start()) - 1
                 linenum = line_numbers[added_index] if added_index < len(line_numbers) else None

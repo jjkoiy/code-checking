@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from app.agents.diff_utils import is_code_file
 from app.services.vector_store import vector_search
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,8 @@ def analyze(changed_files: list[dict], diff_text: str) -> dict:
         language = changed.get("language")
         if not file_path:
             continue
+        if not is_code_file(file_path, language):
+            continue
 
         file_test_types: set[str] = set()
         module = _module_name(file_path)
@@ -81,7 +84,7 @@ def analyze(changed_files: list[dict], diff_text: str) -> dict:
             "module": module,
             "file_path": file_path,
             "reason": "Changed file should have regression coverage for touched behavior.",
-            "suggested_test_types": sorted(file_test_types or {"unit"}),
+            "suggested_test_types": sorted(file_test_types),
         })
 
     relevant_examples: list[dict] = []
@@ -94,7 +97,7 @@ def analyze(changed_files: list[dict], diff_text: str) -> dict:
     logger.info("Test impact produced %d affected module(s).", len(affected_modules))
     return {
         "affected_modules": sorted(set(affected_modules)),
-        "recommended_test_types": sorted(recommended_test_types or {"unit"}),
+        "recommended_test_types": sorted(recommended_test_types),
         "existing_tests_to_run": sorted(set(existing_tests_to_run)),
         "new_tests_needed": new_tests_needed,
         "coverage_gaps": coverage_gaps,

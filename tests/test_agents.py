@@ -253,6 +253,57 @@ def test_test_impact_skips_non_code_files(monkeypatch) -> None:
     assert result["existing_tests_to_run"] == []
 
 
+def test_security_scan_does_not_flag_subprocess_without_shell_true() -> None:
+    raw_code = """# app/demo.py
+
+import subprocess
+
+def list_path(path):
+    return subprocess.run(["ls", path], check=False)
+"""
+
+    findings = security_scan.scan(
+        raw_code,
+        [{"file_path": "app/demo.py", "language": "python"}],
+    )
+
+    assert not any(finding["title"] == "Potential command injection" for finding in findings)
+
+
+def test_security_scan_flags_subprocess_shell_true() -> None:
+    raw_code = """# app/demo.py
+
+import subprocess
+
+def run_command(command):
+    return subprocess.run(command, shell=True)
+"""
+
+    findings = security_scan.scan(
+        raw_code,
+        [{"file_path": "app/demo.py", "language": "python"}],
+    )
+
+    assert any(finding["title"] == "Potential command injection" for finding in findings)
+
+
+def test_security_scan_allows_yaml_safe_load() -> None:
+    raw_code = """# app/demo.py
+
+import yaml
+
+def load_config(raw):
+    return yaml.safe_load(raw)
+"""
+
+    findings = security_scan.scan(
+        raw_code,
+        [{"file_path": "app/demo.py", "language": "python"}],
+    )
+
+    assert not any(finding["title"] == "Insecure deserialization" for finding in findings)
+
+
 def test_report_uses_plain_ok_text_for_empty_review() -> None:
     result = report.generate([], [], {}, {})
 

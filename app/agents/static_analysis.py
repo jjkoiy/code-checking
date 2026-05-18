@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import logging
 
-from app.agents.diff_utils import added_text_by_file
+from app.agents.diff_utils import added_text_by_file, detect_language, is_code_file
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,15 @@ def analyze(diff_text: str, changed_files: list[dict]) -> list[dict]:
         return []
 
     findings: list[dict] = []
-    added_by_file = added_text_by_file(diff_text)
+    fallback_file_path = next(
+        (f.get("file_path") for f in changed_files if f.get("file_path")),
+        None,
+    )
+    added_by_file = added_text_by_file(
+        diff_text,
+        fallback_file_path=fallback_file_path,
+        allow_raw=True,
+    )
     if not added_by_file:
         return findings
     languages_by_file = {
@@ -123,7 +131,10 @@ def analyze(diff_text: str, changed_files: list[dict]) -> list[dict]:
         lang_filter = check.get("languages")
 
         for file_path, (added_text, line_numbers) in added_by_file.items():
-            if lang_filter and languages_by_file.get(file_path) not in lang_filter:
+            language = languages_by_file.get(file_path) or detect_language(file_path)
+            if not is_code_file(file_path, language):
+                continue
+            if lang_filter and language not in lang_filter:
                 continue
             for m in check["pattern"].finditer(added_text):
                 added_index = _line_number(added_text, m.start()) - 1
