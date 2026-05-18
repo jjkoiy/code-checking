@@ -46,9 +46,11 @@ def create_review_endpoint(
     background: BackgroundTasks,
 ) -> CreateReviewResponse:
     task = create_review(req)
-    logger.info("Created review task: %s, dispatching pipeline.", task.id)
-
-    dispatch_review_task(background, task.id)
+    if task.status == "pending":
+        logger.info("Created review task: %s, dispatching pipeline.", task.id)
+        dispatch_review_task(background, task.id)
+    else:
+        logger.info("Created review task: %s with status=%s.", task.id, task.status)
 
     return CreateReviewResponse(task_id=task.id, status=task.status)
 

@@ -47,6 +47,7 @@ def _looks_like_git_diff(diff_text: str) -> bool:
 class CreateReviewRequest(BaseModel):
     source_type: str = "cli"
     repo_name: Optional[str] = None
+    pull_request_number: Optional[int] = Field(default=None, ge=1)
     repo_path: Optional[str] = None
     base_ref: Optional[str] = None
     head_ref: Optional[str] = None
@@ -55,6 +56,14 @@ class CreateReviewRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_review_input(self) -> "CreateReviewRequest":
+        is_github_pr = self.source_type == "github_pr"
+        if is_github_pr:
+            if not self.repo_name:
+                raise ValueError("repo_name is required when source_type is github_pr")
+            if self.pull_request_number is None:
+                raise ValueError("pull_request_number is required when source_type is github_pr")
+            return self
+
         has_diff = bool(self.diff_text and self.diff_text.strip())
         has_changed_files = bool(self.changed_files)
         content_lengths = [

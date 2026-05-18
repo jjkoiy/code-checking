@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import ReviewTask, ReviewTaskEvent, CreateReviewRequest
+from app.services.pull_request_provider import PullRequestProviderError, fetch_pull_request_review_input
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,13 @@ def _utcnow() -> datetime:
 def _serialize_changed_files(req: CreateReviewRequest) -> str | None:
     if not req.changed_files:
         return None
-    return json.dumps([item.model_dump() for item in req.changed_files])
+    return _serialize_changed_file_items([item.model_dump() for item in req.changed_files])
+
+
+def _serialize_changed_file_items(changed_files: list[dict]) -> str | None:
+    if not changed_files:
+        return None
+    return json.dumps(changed_files)
 
 
 def _load_changed_files(task: ReviewTask) -> list[dict]:
@@ -54,20 +61,45 @@ def _record_event(
 def create_review(req: CreateReviewRequest) -> ReviewTask:
     db: Session = SessionLocal()
     try:
+        diff_text = req.diff_text
+        changed_files_json = _serialize_changed_files(req)
+        base_ref = req.base_ref
+        head_ref = req.head_ref
+        status = "pending"
+        current_stage = None
+        error_message = None
+
+        if req.source_type == "github_pr":
+            try:
+                pr_input = fetch_pull_request_review_input(
+                    req.repo_name or "",
+                    req.pull_request_number or 0,
+                )
+                diff_text = pr_input.diff_text
+                changed_files_json = _serialize_changed_file_items(pr_input.changed_files)
+                base_ref = base_ref or pr_input.base_ref
+                head_ref = head_ref or pr_input.head_ref
+            except PullRequestProviderError as exc:
+                status = "failed"
+                current_stage = "input_fetch_failed"
+                error_message = str(exc)
+
         task = ReviewTask(
             source_type=req.source_type,
             repo_name=req.repo_name,
             repo_path=req.repo_path,
-            base_ref=req.base_ref,
-            head_ref=req.head_ref,
-            diff_text=req.diff_text,
-            changed_files_json=_serialize_changed_files(req),
-            status="pending",
+            base_ref=base_ref,
+            head_ref=head_ref,
+            diff_text=diff_text,
+            changed_files_json=changed_files_json,
+            status=status,
+            current_stage=current_stage,
+            error_message=error_message,
         )
         db.add(task)
         db.commit()
         db.refresh(task)
-        _record_event(db, task.id, "created", "pending")
+        _record_event(db, task.id, current_stage or "created", status, error_message)
         db.commit()
         db.refresh(task)
         return task

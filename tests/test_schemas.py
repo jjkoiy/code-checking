@@ -30,6 +30,19 @@ def test_create_review_request_allows_diff_or_changed_files() -> None:
     assert CreateReviewRequest(
         changed_files=[ChangedFileIn(file_path="app/demo.py", content="print('hello')")]
     )
+    assert CreateReviewRequest(
+        source_type="github_pr",
+        repo_name="owner/repo",
+        pull_request_number=12,
+    )
+
+
+def test_github_pr_request_requires_repo_and_number() -> None:
+    with pytest.raises(ValidationError, match="repo_name"):
+        CreateReviewRequest(source_type="github_pr", pull_request_number=12)
+
+    with pytest.raises(ValidationError, match="pull_request_number"):
+        CreateReviewRequest(source_type="github_pr", repo_name="owner/repo")
 
 
 def test_create_review_request_rejects_changed_files_without_content_when_diff_is_absent() -> None:

@@ -93,3 +93,25 @@ def test_create_review_endpoint_dispatches_task(monkeypatch) -> None:
 
     assert response.task_id == "task-4"
     assert dispatched == {"task_id": "task-4"}
+
+
+def test_create_review_endpoint_does_not_dispatch_failed_input(monkeypatch) -> None:
+    task = SimpleNamespace(id="task-5", status="failed")
+    monkeypatch.setattr(reviews, "create_review", lambda req: task)
+
+    def fail_dispatch(background, task_id):
+        raise AssertionError("failed input tasks should not be dispatched")
+
+    monkeypatch.setattr(reviews, "dispatch_review_task", fail_dispatch)
+
+    response = reviews.create_review_endpoint(
+        CreateReviewRequest(
+            source_type="github_pr",
+            repo_name="owner/repo",
+            pull_request_number=5,
+        ),
+        BackgroundTasks(),
+    )
+
+    assert response.task_id == "task-5"
+    assert response.status == "failed"
