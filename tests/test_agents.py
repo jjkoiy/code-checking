@@ -185,7 +185,7 @@ def test_llm_review_redacts_sensitive_values_before_external_call(monkeypatch) -
 --- a/app/demo.py
 +++ b/app/demo.py
 @@ -1 +1,3 @@
-+API_KEY = "sk-testsecret1234567890"
++API_KEY = "fake-secret-value"
 +password = "hunter2"
 +def login(user): return user
 """,
@@ -194,7 +194,7 @@ def test_llm_review_redacts_sensitive_values_before_external_call(monkeypatch) -
         project_context={"languages": ["python"]},
     )
 
-    assert "sk-testsecret1234567890" not in captured["user_prompt"]
+    assert "fake-secret-value" not in captured["user_prompt"]
     assert "hunter2" not in captured["user_prompt"]
     assert "[REDACTED_SECRET]" in captured["user_prompt"]
 

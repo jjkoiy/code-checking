@@ -6,7 +6,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 This project is a multi-agent code review system built with FastAPI, LangGraph, SQLAlchemy, Chroma, and an OpenAI-compatible LLM client. It accepts Git diffs through an API, creates review tasks, runs a sequential review pipeline, and returns structured findings plus a Markdown report.
 
-Current phase: P1 skeleton with functional API, database persistence, sequential agent orchestration, pattern-based static/security/style checks, mock/optional LLM review, draft test generation, validation, reporting, and pytest coverage for the core flow.
+Current phase: P1/P2 working skeleton with functional API, lightweight web console, database persistence, sequential agent orchestration, pattern-based static/security/style checks, mock/optional OpenAI-compatible LLM review, LLM safety gates/redaction, draft test generation, validation, reporting, and pytest coverage for the core flow.
 
 ## Development Commands
 
@@ -18,6 +18,9 @@ pip install -r requirements.txt
 
 # Run the FastAPI dev server
 uvicorn app.main:app --reload --port 8000
+
+# Open the local web console after the server starts
+# http://127.0.0.1:8000/
 
 # Run tests
 python -m pytest tests -q
@@ -61,6 +64,8 @@ GET /api/reviews/{task_id}/report
 | `GET /api/reviews/{task_id}` | Get task status |
 | `GET /api/reviews/{task_id}/report` | Get final or in-progress report response |
 
+The root web UI is served from `app/static/index.html` and provides a simple console for submitting unified Git diffs, polling review status, and viewing findings, Markdown, and JSON output.
+
 ## Architecture
 
 The app is organized around a service layer plus a sequential LangGraph agent pipeline.
@@ -100,11 +105,13 @@ Each node reads and updates `ReviewState`. If a node records an error, the final
 | `app/config.py` | `Settings` dataclass loaded from environment variables |
 | `app/database.py` | SQLAlchemy engine/session/Base and schema initialization |
 | `app/models/review_task.py` | `ReviewTask` ORM model |
+| `app/models/findings.py` | Pydantic finding validation and normalization helpers |
 | `app/models/schemas.py` | Pydantic request/response schemas |
 | `app/models/state.py` | `ReviewState` and `Finding` TypedDicts |
 | `app/routers/reviews.py` | Review task API routes |
 | `app/services/review_service.py` | Task CRUD, pipeline execution, result persistence |
 | `app/services/llm_client.py` | OpenAI-compatible chat completions client |
+| `app/services/llm_safety.py` | LLM mode selection and sensitive value redaction |
 | `app/services/vector_store.py` | Chroma vector search wrapper with seed documents |
 | `app/agents/orchestrator.py` | LangGraph `StateGraph` construction and execution |
 | `app/agents/context_builder.py` | Diff parsing, language detection, project context construction |
@@ -118,6 +125,7 @@ Each node reads and updates `ReviewState`. If a node records an error, the final
 | `app/agents/test_generation.py` | Draft test plan and generated test snippets |
 | `app/agents/validation.py` | Structural validation for generated tests |
 | `app/agents/report.py` | Markdown and JSON report generation |
+| `app/static/index.html` | Browser-based review console |
 | `tests/` | pytest suite for core behavior |
 
 ## Implemented Review Capabilities
@@ -166,6 +174,24 @@ Findings include:
 - optional `attack_scenario`
 - optional `source_agents`
 
+Finding output is normalized through `FindingModel`. Invalid findings are dropped with validation warnings so final reports consume only the normalized aggregate list.
+
+## Input Validation and LLM Safety
+
+API input validation currently enforces:
+
+- `diff_text` must be a unified Git diff when provided.
+- `changed_files` may be used with raw file content when no diff is available.
+- `changed_files.file_path` must be a relative repository path without control characters, absolute paths, or `..`.
+- `REVIEW_MAX_FILES`, `REVIEW_MAX_DIFF_CHARS`, `REVIEW_MAX_FILE_CONTENT_CHARS`, and `REVIEW_MAX_TOTAL_CONTENT_CHARS` are enforced by request schemas.
+
+LLM safety currently works as follows:
+
+- Default local mode is mock review (`LLM_PROVIDER=mock`, no API key required).
+- External LLM calls require both an API key and `LLM_EXTERNAL_ENABLED=true`.
+- Redaction is enabled by default through `LLM_REDACTION_ENABLED=true`.
+- Sensitive patterns such as API keys, bearer tokens, passwords/secrets, private keys, and common connection strings are redacted before external calls when redaction is enabled.
+
 ## Configuration
 
 All configuration is loaded from environment variables.
@@ -174,14 +200,18 @@ All configuration is loaded from environment variables.
 |---|---|---|
 | `APP_ENV` | `development` | App environment |
 | `DATABASE_URL` | `sqlite:///./data/app.db` | Database connection URL |
-| `LLM_PROVIDER` | `openai` | LLM provider; use `mock` for local heuristic mode |
-| `LLM_MODEL` | `gpt-4.1-mini` | LLM model name |
+| `LLM_PROVIDER` | `mock` | LLM provider; use `mock` for local heuristic mode |
+| `LLM_MODEL` | `mock-reviewer` | LLM model name |
 | `LLM_API_KEY` | empty | LLM API key |
-| `LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
+| `LLM_BASE_URL` | empty | OpenAI-compatible API base URL |
+| `LLM_EXTERNAL_ENABLED` | `false` | Gate for making external LLM calls |
+| `LLM_REDACTION_ENABLED` | `true` | Redact sensitive values before external LLM calls |
 | `LLM_TIMEOUT_SECONDS` | `60` | LLM request timeout |
 | `CHROMA_PATH` | `./data/chroma` | Chroma persistence path |
 | `REVIEW_MAX_FILES` | `20` | Planned review file-count limit |
 | `REVIEW_MAX_DIFF_CHARS` | `60000` | Diff characters sent to LLM prompt |
+| `REVIEW_MAX_FILE_CONTENT_CHARS` | `200000` | Per-file raw content size limit |
+| `REVIEW_MAX_TOTAL_CONTENT_CHARS` | `500000` | Total raw changed file content size limit |
 | `AGENT_MAX_RETRY` | `2` | Planned agent retry limit |
 | `VALIDATION_MAX_RETRY` | `2` | Planned validation retry limit |
 
@@ -209,10 +239,16 @@ Current coverage:
 
 - diff parsing and new-file line-number mapping
 - static/security/style findings include file path and line number
-- mock LLM review returns local heuristic findings
+- mock LLM review returns local heuristic findings and avoids non-code/plain-text false positives
+- external LLM calls are gated and redacted before use
 - changed file metadata merge preserves request-provided content
+- request schema validation covers missing input, unsafe paths, diff shape, file count, diff size, and content size limits
+- security scan edge cases cover command execution, safe subprocess usage, and YAML safe loading
+- aggregation normalizes findings and drops invalid entries with warnings
+- report output includes metadata, review scope, empty/no-content states, severity counts, and normalized findings only
 - report node marks pipeline errors as failed
-- review service persists completed reports and findings
+- router behavior covers failed reports with and without partial output
+- review service persists stage progress, completed reports, and findings
 
 Run:
 
@@ -220,10 +256,10 @@ Run:
 .\myenv\Scripts\python.exe -m pytest tests -q
 ```
 
-Last known result:
+Last verified result:
 
 ```text
-7 passed
+41 passed
 ```
 
 ## Docker
@@ -240,11 +276,11 @@ For persistent SQLite and Chroma data, mount a volume for `/app/data`.
 ## Current Limitations
 
 - No authentication, authorization, rate limiting, or tenant isolation yet.
-- Input size limits are configured but not fully enforced at the API/service boundary.
+- Input size limits are enforced by request schemas, but API/server-level body limits are not configured yet.
 - FastAPI `BackgroundTasks` is not a durable job queue. Long-running production use should move to a real worker system.
-- `current_stage` is not persisted after every pipeline node.
-- LLM output needs stricter schema validation and safer fallback behavior before production use.
-- Diff or source content may contain secrets; external LLM calls should be gated by policy and redaction.
+- `current_stage` is persisted through stage callbacks, but there is still no durable job history table.
+- LLM output is normalized before final reporting, but external LLM behavior still needs stronger production policy and observability.
+- Diff or source content may contain secrets; external LLM calls are gated and redacted by default, but production deployments should still review policy and audit requirements.
 - Chroma currently uses seed docs and deterministic hash embeddings, not a real project knowledge base.
 - Generated tests are drafts and are not automatically written to the target repo or executed.
 - Type checking is not clean yet.

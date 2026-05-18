@@ -123,9 +123,50 @@
     .section-head {
       display: flex;
       justify-content: space-between;
+      align-items: center;
       gap: 12px;
       padding: 14px 16px;
       border-bottom: 1px solid var(--line);
+    }
+
+    .result-tools {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .lang-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      height: 32px;
+      padding: 2px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #f8fafc;
+    }
+
+    .lang-btn {
+      height: 26px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .lang-btn:hover {
+      background: #eef2f6;
+      color: var(--text);
+    }
+
+    .lang-btn.active {
+      background: var(--accent);
+      color: #fff;
     }
 
     h2 {
@@ -413,6 +454,11 @@
         flex-direction: column;
       }
 
+      .section-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
       .grid-2,
       .summary {
         grid-template-columns: 1fr;
@@ -467,7 +513,13 @@
     <section>
       <div class="section-head">
         <h2>Review Result</h2>
-        <div class="status-pill"><span class="dot" id="taskDot"></span><span id="taskStatus">idle</span></div>
+        <div class="result-tools">
+          <div class="lang-toggle" aria-label="Result language">
+            <button class="lang-btn active" id="langEnBtn" type="button" data-lang="en">English</button>
+            <button class="lang-btn" id="langZhBtn" type="button" data-lang="zh">中文</button>
+          </div>
+          <div class="status-pill"><span class="dot" id="taskDot"></span><span id="taskStatus">idle</span></div>
+        </div>
       </div>
       <div class="body">
         <div class="summary">
@@ -516,6 +568,123 @@ index 1111111..2222222 100644
     const state = {
       taskId: null,
       pollTimer: null,
+      resultLanguage: "en",
+      latestReport: null,
+    };
+
+    const translations = {
+      severity: {
+        critical: "严重",
+        high: "高危",
+        medium: "中危",
+        low: "低危",
+      },
+      category: {
+        bug: "缺陷",
+        security: "安全",
+        maintainability: "可维护性",
+        reliability: "可靠性",
+        readability: "可读性",
+        style: "代码风格",
+        uncategorized: "未分类",
+      },
+      title: {
+        "Authentication flow may need review": "需要检查认证流程",
+        "Error handling should be reviewed for completeness": "需要检查错误处理是否完整",
+        "Database session/transaction management should be verified": "需要确认数据库会话和事务管理",
+        "API compatibility should be checked": "需要检查 API 兼容性",
+        "Input validation should be comprehensive": "需要完善输入校验",
+        "Potential SQL injection via f-string": "f-string 可能导致 SQL 注入",
+        "Variable named query/sql assigned to f-string": "query/sql 变量使用了 f-string",
+        "Hardcoded secret or credential": "硬编码密钥或凭据",
+        "Potential command injection": "潜在命令注入",
+        "Use of dangerous eval/exec": "使用危险的 eval/exec",
+        "Insecure deserialization": "不安全的反序列化",
+        "Weak hash algorithm": "弱哈希算法",
+        "HTTP instead of HTTPS": "使用 HTTP 而不是 HTTPS",
+        "Debug mode enabled": "开启了调试模式",
+        "Bare except clause": "裸 except 捕获",
+        "Empty except block": "空 except 代码块",
+        "Mutable default argument": "可变默认参数",
+        "Print statement in production path": "生产路径中使用 print",
+        "SQL string concatenation / interpolation": "SQL 字符串拼接或插值",
+        "Broad exception caught": "捕获范围过宽的异常",
+        "Hardcoded absolute path": "硬编码绝对路径",
+        "Open without context manager": "未使用上下文管理器打开文件",
+        "Overly long line": "代码行过长",
+        "Magic number used": "使用魔法数字",
+        "Single-letter variable name": "单字母变量名",
+        "TODO/FIXME left in code": "代码中遗留 TODO/FIXME",
+        "Function appears too long": "函数可能过长",
+      },
+      text: {
+        "Changes touch authentication-related code. Verify that auth checks are applied consistently across all affected endpoints.": "变更涉及认证相关代码。请确认所有受影响接口都一致地应用了认证检查。",
+        "Ensure every protected endpoint has an auth dependency and that role checks are applied before business logic.": "确保每个受保护接口都有认证依赖，并且在业务逻辑前完成角色检查。",
+        "Error handling patterns detected. Verify that exceptions are translated appropriately at API boundaries and that users get actionable error messages.": "检测到错误处理相关改动。请确认 API 边界能正确转换异常，并向用户返回可操作的错误信息。",
+        "Map internal exceptions to appropriate HTTP status codes. Avoid leaking stack traces to API consumers.": "将内部异常映射为合适的 HTTP 状态码，避免向 API 使用者泄露堆栈信息。",
+        "Database operations detected. Verify that sessions are properly closed and transactions are committed or rolled back on error.": "检测到数据库操作。请确认会话会正确关闭，事务在成功时提交、出错时回滚。",
+        "Use context managers for DB sessions. Ensure rollback on exceptions and commit only on success.": "数据库会话建议使用上下文管理器。异常时回滚，只在成功时提交。",
+        "Changes affect API surface. Verify backward compatibility and that request/response schemas haven't broken existing consumers.": "变更影响 API 表面。请确认向后兼容性，并检查请求/响应模型没有破坏现有调用方。",
+        "Review all changed endpoints for backward compatibility. Consider API versioning if breaking changes are intentional.": "检查所有变更接口的向后兼容性。如果有意引入破坏性变更，请考虑 API 版本化。",
+        "User input handling detected. Verify that all inputs are validated with appropriate Pydantic models or manual checks.": "检测到用户输入处理。请确认所有输入都通过合适的 Pydantic 模型或手动逻辑进行校验。",
+        "Add Pydantic validators for business rules. Check for edge cases: empty strings, oversized inputs, unexpected types.": "为业务规则添加 Pydantic 校验器，并覆盖空字符串、超长输入、异常类型等边界情况。",
+        "SQL query built with f-string interpolation allows SQL injection attacks.": "使用 f-string 拼接 SQL 查询会导致 SQL 注入风险。",
+        "An attacker could inject malicious SQL via user-controlled input interpolated into the query string.": "攻击者可能通过被插入查询字符串的用户输入注入恶意 SQL。",
+        "Use parameterized queries: SQLAlchemy text() with bindparams, psycopg2 %s placeholders, or an ORM.": "使用参数化查询，例如 SQLAlchemy text() + bindparams、psycopg2 %s 占位符，或 ORM。",
+        "A variable named query/sql/cursor assigned to an f-string suggests dynamic SQL construction.": "名为 query/sql/cursor 的变量被赋值为 f-string，通常意味着正在动态构造 SQL。",
+        "Dynamic SQL without proper parameterization is vulnerable to SQL injection.": "没有正确参数化的动态 SQL 容易受到 SQL 注入攻击。",
+        "Use parameterized queries or an ORM. If dynamic table/column names are needed, validate against an allowlist.": "使用参数化查询或 ORM。如果必须动态指定表名/列名，请使用白名单校验。",
+        "A secret or credential appears to be hardcoded in source code.": "源码中疑似硬编码了密钥或凭据。",
+        "Secrets committed to version control are exposed to anyone with repository access and persist in git history.": "提交到版本库的密钥会暴露给有仓库权限的人，并长期留在 git 历史中。",
+        "Use environment variables (os.getenv) or a secrets manager (AWS Secrets Manager, HashiCorp Vault).": "使用环境变量（os.getenv）或密钥管理服务（如 AWS Secrets Manager、HashiCorp Vault）。",
+        "Shell command execution with user-controlled input may allow command injection.": "用用户可控输入执行 shell 命令可能导致命令注入。",
+        "An attacker could inject shell metacharacters (;, |, &&, $()) to execute arbitrary commands.": "攻击者可能注入 shell 元字符（;, |, &&, $()）来执行任意命令。",
+        "Avoid shell=True. Use subprocess.run() with a list of arguments instead of a string. Sanitize all user inputs passed to shell commands.": "避免 shell=True。使用参数列表形式的 subprocess.run()，不要拼接命令字符串，并清理所有传给 shell 的用户输入。",
+        "eval() and exec() execute arbitrary code and are extremely dangerous with user input.": "eval() 和 exec() 会执行任意代码，和用户输入一起使用非常危险。",
+        "An attacker could execute arbitrary Python code on the server via user-controlled input to eval().": "攻击者可能通过传入 eval() 的用户输入在服务器上执行任意 Python 代码。",
+        "Remove eval/exec entirely. If dynamic dispatch is needed, use a lookup table or importlib.": "移除 eval/exec。如果需要动态分发，请使用查找表或 importlib。",
+        "Deserializing untrusted data with pickle, yaml.load, or marshal can lead to arbitrary code execution.": "使用 pickle、yaml.load 或 marshal 反序列化不可信数据可能导致任意代码执行。",
+        "An attacker could craft a malicious pickle payload that executes code when deserialized.": "攻击者可以构造恶意 pickle 载荷，在反序列化时执行代码。",
+        "Use yaml.safe_load() instead of yaml.load(), and never deserialize pickle/marshal data from untrusted sources.": "使用 yaml.safe_load() 替代 yaml.load()，不要反序列化来自不可信来源的 pickle/marshal 数据。",
+        "MD5 and SHA1 are cryptographically broken and should not be used for security purposes.": "MD5 和 SHA1 在密码学上已不安全，不应再用于安全场景。",
+        "Collision attacks against MD5/SHA1 can allow an attacker to forge signatures or bypass integrity checks.": "针对 MD5/SHA1 的碰撞攻击可能让攻击者伪造签名或绕过完整性校验。",
+        "Use hashlib.sha256() or stronger. For passwords, use bcrypt, scrypt, or argon2 via a dedicated library.": "使用 hashlib.sha256() 或更强算法。密码请使用专门库提供的 bcrypt、scrypt 或 argon2。",
+        "Hardcoded HTTP URLs may leak sensitive data in transit.": "硬编码 HTTP URL 可能在传输中泄露敏感数据。",
+        "Data sent over HTTP can be intercepted via man-in-the-middle attacks.": "通过 HTTP 传输的数据可能被中间人攻击截获。",
+        "Use HTTPS URLs. If HTTP must be used for local development, gate it behind an environment check.": "使用 HTTPS URL。如果本地开发必须使用 HTTP，请通过环境判断进行限制。",
+        "Debug mode enabled in production can leak stack traces and sensitive configuration details.": "生产环境开启调试模式可能泄露堆栈和敏感配置信息。",
+        "Error pages with debug info expose file paths, code snippets, and environment details.": "包含调试信息的错误页会暴露文件路径、代码片段和环境细节。",
+        "Set debug=False and control it via an environment variable (e.g., APP_ENV).": "设置 debug=False，并通过环境变量（如 APP_ENV）控制。",
+        "Bare 'except:' catches system-exiting exceptions (KeyboardInterrupt, SystemExit).": "裸 except: 会捕获 KeyboardInterrupt、SystemExit 等系统退出异常。",
+        "Catch specific exception types, or at minimum 'except Exception'.": "捕获更具体的异常类型，至少使用 except Exception。",
+        "Empty except block silently swallows errors, making debugging difficult.": "空 except 代码块会静默吞掉错误，增加调试难度。",
+        "At minimum log the exception; consider re-raising or handling it explicitly.": "至少记录异常日志，并考虑重新抛出或显式处理。",
+        "Mutable default arguments are shared across all calls to the function.": "可变默认参数会在函数的所有调用之间共享。",
+        "Use None as the default and initialize the mutable value inside the function body.": "使用 None 作为默认值，并在函数体内初始化可变对象。",
+        "Print statements should be replaced with proper logging in production code.": "生产代码中的 print 应替换为正式日志。",
+        "Use logging.getLogger(__name__).info/debug/warning instead of print().": "使用 logging.getLogger(__name__).info/debug/warning 替代 print()。",
+        "SQL query built with f-string interpolation is prone to SQL injection and syntax errors.": "用 f-string 拼接 SQL 查询容易产生 SQL 注入和语法错误。",
+        "Use parameterized queries (SQLAlchemy text() with bindparams, or psycopg2 %s placeholders).": "使用参数化查询，例如 SQLAlchemy text() + bindparams，或 psycopg2 %s 占位符。",
+        "Catching 'Exception' may hide unexpected errors. Consider a narrower type.": "捕获 Exception 可能隐藏意外错误，建议使用更具体的异常类型。",
+        "Catch the most specific exception type that you expect.": "捕获你预期的最具体异常类型。",
+        "Hardcoded absolute paths make the code non-portable across environments.": "硬编码绝对路径会降低代码在不同环境中的可移植性。",
+        "Use relative paths, pathlib, or environment variables for paths.": "使用相对路径、pathlib 或环境变量管理路径。",
+        "Using open() without 'with' may leak file handles.": "不使用 with 调用 open() 可能导致文件句柄泄漏。",
+        "Use 'with open(...) as f:' to guarantee the file is closed.": "使用 with open(...) as f: 确保文件会被关闭。",
+        "Lines longer than 120 characters reduce readability.": "超过 120 字符的代码行会降低可读性。",
+        "Break the line into multiple lines or extract intermediate variables.": "将长行拆分为多行，或提取中间变量。",
+        "Numeric literals without a named constant obscure intent.": "没有命名常量的数字字面量会让意图不清晰。",
+        "Extract the value into a named constant (e.g., MAX_RETRIES = 3).": "将该值提取为命名常量，例如 MAX_RETRIES = 3。",
+        "Single-letter names (except common loop vars like i, j) are hard to understand.": "单字母变量名（常见循环变量 i、j 除外）不易理解。",
+        "Use a descriptive name that conveys the variable's purpose.": "使用能表达变量用途的描述性名称。",
+        "Unresolved TODO or FIXME comments may indicate incomplete work.": "未处理的 TODO 或 FIXME 注释可能表示工作尚未完成。",
+        "Unresolved TODO or FIXME comment may indicate incomplete work.": "未处理的 TODO 或 FIXME 注释可能表示工作尚未完成。",
+        "Address the item or convert it to a tracked ticket.": "处理该事项，或转换为可跟踪的任务单。",
+        "Very long functions are hard to test and understand. (Heuristic: > 50 lines in diff chunk)": "过长函数难以测试和理解。（启发式规则：diff 片段中超过 50 行）",
+        "Consider extracting helper functions for logical sub-steps.": "考虑按逻辑步骤提取辅助函数。",
+        "Fix generated test syntax/errors before enabling validation runs.": "启用验证运行前，请先修复生成测试中的语法或运行错误。",
+        "Run the generated tests in the target repository before marking validation as passed.": "标记验证通过前，请先在目标仓库运行生成的测试。",
+      },
     };
 
     const els = {
@@ -538,6 +707,7 @@ index 1111111..2222222 100644
       findingsList: document.getElementById("findingsList"),
       markdownReport: document.getElementById("markdownReport"),
       jsonReport: document.getElementById("jsonReport"),
+      langButtons: document.querySelectorAll(".lang-btn"),
     };
 
     function setMessage(text, type = "") {
@@ -560,6 +730,24 @@ index 1111111..2222222 100644
       }
     }
 
+    function looksLikeGitDiff(text) {
+      return /^diff --git a\/.+ b\/.+$/m.test(text) && /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m.test(text);
+    }
+
+    function formatApiError(responseText, fallback) {
+      try {
+        const payload = JSON.parse(responseText);
+        const detail = payload.detail;
+        if (Array.isArray(detail) && detail.length) {
+          return detail.map((item) => item.msg || String(item)).join(" ");
+        }
+        if (typeof detail === "string") return detail;
+      } catch (error) {
+        // Keep the original response text below.
+      }
+      return responseText || fallback;
+    }
+
     async function checkHealth() {
       try {
         const response = await fetch("/health");
@@ -576,6 +764,10 @@ index 1111111..2222222 100644
       const diffText = els.diffText.value.trim();
       if (!diffText) {
         setMessage("Please paste or load a diff first.", "error");
+        return;
+      }
+      if (!looksLikeGitDiff(diffText)) {
+        setMessage("Please paste a unified Git diff, not plain text. It should include a diff --git header and @@ hunk header.", "error");
         return;
       }
 
@@ -599,7 +791,7 @@ index 1111111..2222222 100644
 
         if (!response.ok) {
           const text = await response.text();
-          throw new Error(text || `HTTP ${response.status}`);
+          throw new Error(formatApiError(text, `HTTP ${response.status}`));
         }
 
         const created = await response.json();
@@ -648,6 +840,7 @@ index 1111111..2222222 100644
     }
 
     function resetResult() {
+      state.latestReport = null;
       els.totalCount.textContent = "0";
       els.blockingCount.textContent = "0";
       els.highCount.textContent = "0";
@@ -659,17 +852,19 @@ index 1111111..2222222 100644
     }
 
     function renderReport(report) {
+      state.latestReport = report;
       const json = report.json_report || {};
       const findings = json.findings || [];
       const generatedTests = report.generated_tests || json.generated_tests || [];
       const highOrCritical = findings.filter((f) => f.severity === "high" || f.severity === "critical").length;
+      const isZh = state.resultLanguage === "zh";
 
       els.totalCount.textContent = json.total_findings ?? findings.length;
       els.blockingCount.textContent = json.blocking_count ?? findings.filter((f) => f.blocking).length;
       els.highCount.textContent = highOrCritical;
       els.testsCount.textContent = generatedTests.length;
-      els.markdownReport.textContent = report.markdown_report || "No Markdown report.";
-      els.jsonReport.textContent = JSON.stringify(report, null, 2);
+      els.markdownReport.textContent = isZh ? buildChineseMarkdown(report) : (report.markdown_report || "No Markdown report.");
+      els.jsonReport.textContent = JSON.stringify(isZh ? translateReportForDisplay(report) : report, null, 2);
 
       els.findingsList.innerHTML = "";
       els.findingsEmpty.style.display = findings.length ? "none" : "block";
@@ -678,22 +873,212 @@ index 1111111..2222222 100644
         const item = document.createElement("article");
         item.className = "finding";
         const severity = String(finding.severity || "low").toLowerCase();
+        const displayFinding = isZh ? translateFinding(finding) : finding;
+        const displaySeverity = isZh ? translateSeverity(severity) : severity;
+        const displayCategory = isZh ? translateCategory(finding.category || "uncategorized") : (finding.category || "uncategorized");
         item.innerHTML = `
           <div class="finding-head">
-            <h3>${escapeHtml(finding.title || "Untitled finding")}</h3>
-            <span class="severity ${escapeHtml(severity)}">${escapeHtml(severity)}</span>
+            <h3>${escapeHtml(displayFinding.title || (isZh ? "未命名问题" : "Untitled finding"))}</h3>
+            <span class="severity ${escapeHtml(severity)}">${escapeHtml(displaySeverity)}</span>
           </div>
           <div class="meta">
             <code>${escapeHtml(finding.file_path || "N/A")}:${escapeHtml(String(finding.line_number || "N/A"))}</code>
-            · ${escapeHtml(finding.category || "uncategorized")}
-            · confidence ${Math.round(Number(finding.confidence || 0) * 100)}%
+            · ${escapeHtml(displayCategory)}
+            · ${isZh ? "置信度" : "confidence"} ${Math.round(Number(finding.confidence || 0) * 100)}%
           </div>
-          <p>${escapeHtml(finding.description || "")}</p>
-          ${finding.evidence ? `<p><strong>Evidence:</strong> <code>${escapeHtml(finding.evidence)}</code></p>` : ""}
-          ${finding.suggestion ? `<p><strong>Suggestion:</strong> ${escapeHtml(finding.suggestion)}</p>` : ""}
+          <p>${escapeHtml(displayFinding.description || "")}</p>
+          ${finding.evidence ? `<p><strong>${isZh ? "证据" : "Evidence"}:</strong> <code>${escapeHtml(finding.evidence)}</code></p>` : ""}
+          ${displayFinding.attack_scenario ? `<p><strong>${isZh ? "攻击场景" : "Attack Scenario"}:</strong> ${escapeHtml(displayFinding.attack_scenario)}</p>` : ""}
+          ${displayFinding.suggestion ? `<p><strong>${isZh ? "建议" : "Suggestion"}:</strong> ${escapeHtml(displayFinding.suggestion)}</p>` : ""}
         `;
         els.findingsList.appendChild(item);
       }
+    }
+
+    function translateSeverity(severity) {
+      return translations.severity[String(severity || "low").toLowerCase()] || severity;
+    }
+
+    function translateCategory(category) {
+      return translations.category[String(category || "uncategorized").toLowerCase()] || category;
+    }
+
+    function translateText(text) {
+      if (!text) return text;
+      return translations.title[text] || translations.text[text] || text;
+    }
+
+    function translateFinding(finding) {
+      return {
+        ...finding,
+        severity_label: translateSeverity(finding.severity),
+        category_label: translateCategory(finding.category),
+        title: translateText(finding.title),
+        description: translateText(finding.description),
+        suggestion: translateText(finding.suggestion),
+        attack_scenario: translateText(finding.attack_scenario),
+      };
+    }
+
+    function translateReportForDisplay(report) {
+      const json = report.json_report || {};
+      const translatedJson = {
+        ...json,
+        summary: buildChineseSummary(json),
+        findings: (json.findings || []).map(translateFinding),
+        test_suggestions: (json.test_suggestions || []).map((item) => ({
+          ...item,
+          name: translateText(item.name),
+          risk_covered: translateText(item.risk_covered),
+          test_type_label: translateTestType(item.test_type),
+        })),
+        validation_result: translateValidation(json.validation_result),
+      };
+      return {
+        ...report,
+        summary: translatedJson.summary,
+        markdown_report: buildChineseMarkdown(report),
+        json_report: translatedJson,
+        generated_tests: report.generated_tests || json.generated_tests || [],
+      };
+    }
+
+    function translateValidation(validation) {
+      if (!validation) return validation;
+      return {
+        ...validation,
+        status_label: translateValidationStatus(validation.status),
+        errors: validation.errors || [],
+        fix_suggestions: (validation.fix_suggestions || []).map(translateText),
+      };
+    }
+
+    function translateValidationStatus(status) {
+      const labels = {
+        passed: "通过",
+        failed: "失败",
+        warning: "有警告",
+        not_run: "未运行",
+      };
+      return labels[String(status || "not_run").toLowerCase()] || status;
+    }
+
+    function translateTestType(type) {
+      const labels = {
+        unit: "单元测试",
+        integration: "集成测试",
+        security: "安全测试",
+        regression: "回归测试",
+      };
+      return labels[String(type || "unit").toLowerCase()] || type;
+    }
+
+    function buildChineseSummary(json) {
+      const total = json.total_findings ?? (json.findings || []).length;
+      const blocking = json.blocking_count ?? (json.findings || []).filter((f) => f.blocking).length;
+      const critical = json.critical_count ?? (json.findings || []).filter((f) => f.severity === "critical").length;
+      const high = json.high_count ?? (json.findings || []).filter((f) => f.severity === "high").length;
+      const medium = json.medium_count ?? (json.findings || []).filter((f) => f.severity === "medium").length;
+      const low = json.low_count ?? (json.findings || []).filter((f) => f.severity === "low").length;
+      return `审查完成。共发现 ${total} 个问题：${blocking} 个阻塞，${critical} 个严重，${high} 个高危，${medium} 个中危，${low} 个低危。`;
+    }
+
+    function findingMarkdownZh(finding) {
+      const translated = translateFinding(finding);
+      const severity = translateSeverity(finding.severity || "low");
+      const blocking = finding.blocking ? " **[阻塞]**" : "";
+      const lines = [
+        `### [${severity}]: ${translated.title || "未命名问题"}${blocking}`,
+        "",
+        `- **类别**: ${translateCategory(finding.category || "uncategorized")}`,
+        `- **文件**: \`${finding.file_path || "N/A"}\``,
+        `- **行号**: ${finding.line_number || "N/A"}`,
+        `- **置信度**: ${Math.round(Number(finding.confidence || 0) * 100)}%`,
+        `- **来源**: ${(finding.source_agents || [finding.agent_name || "unknown"]).join(", ")}`,
+        "",
+        `**描述**: ${translated.description || "N/A"}`,
+        "",
+      ];
+      if (finding.evidence) {
+        lines.push(`**证据**: \`${finding.evidence}\``, "");
+      }
+      if (translated.suggestion) {
+        lines.push(`**建议**: ${translated.suggestion}`, "");
+      }
+      if (translated.attack_scenario) {
+        lines.push(`**攻击场景**: ${translated.attack_scenario}`, "");
+      }
+      return lines.join("\n");
+    }
+
+    function buildChineseMarkdown(report) {
+      const json = report.json_report || {};
+      const findings = json.findings || [];
+      const sections = [
+        ["阻塞问题", findings.filter((f) => f.blocking)],
+        ["严重问题", findings.filter((f) => f.severity === "critical" && !f.blocking)],
+        ["高危问题", findings.filter((f) => f.severity === "high")],
+        ["中危问题", findings.filter((f) => f.severity === "medium")],
+        ["低危问题", findings.filter((f) => f.severity === "low")],
+      ];
+      const md = [
+        "# 代码审查报告",
+        "",
+        "## 摘要",
+        "",
+        buildChineseSummary(json),
+        "",
+        "---",
+        "",
+      ];
+
+      for (const [title, sectionFindings] of sections) {
+        if (!sectionFindings.length) continue;
+        md.push(`## ${title}`, "");
+        sectionFindings.forEach((finding) => md.push(findingMarkdownZh(finding)));
+        md.push("---", "");
+      }
+
+      if (!findings.length) {
+        md.push("未发现问题。", "");
+      }
+
+      const testPlan = json.test_suggestions || [];
+      const generatedTests = report.generated_tests || json.generated_tests || [];
+      if (testPlan.length) {
+        md.push("## 测试建议", "");
+        testPlan.forEach((item) => {
+          md.push(`- **${translateText(item.name || "未命名")}**: ${translateText(item.risk_covered || "")} (${translateTestType(item.test_type || "unit")})`);
+        });
+        md.push("", "---", "");
+      }
+
+      if (generatedTests.length) {
+        md.push("## 生成的测试草稿", "");
+        generatedTests.forEach((generated) => {
+          md.push(`### ${generated.name || "未命名测试"}`, "");
+          md.push(`- **目标文件**: \`${generated.target_file || "N/A"}\``);
+          md.push(`- **测试框架**: ${generated.framework || "N/A"}`);
+          md.push(`- **已执行**: ${generated.executed ? "是" : "否"}`);
+          if (generated.code) {
+            md.push("", "```python", generated.code.trimEnd(), "```");
+          }
+          md.push("");
+        });
+        md.push("---", "");
+      }
+
+      if (json.validation_result) {
+        md.push("## 验证", "");
+        md.push(`- **状态**: ${translateValidationStatus(json.validation_result.status || "not_run")}`);
+        const errors = json.validation_result.errors || [];
+        if (errors.length) md.push(`- **错误数**: ${errors.length}`);
+        md.push("");
+      }
+
+      md.push("*由 Agent Review System v0.1 生成*");
+      md.push("");
+      return md.join("\n");
     }
 
     function escapeHtml(value) {
@@ -712,6 +1097,20 @@ index 1111111..2222222 100644
         button.classList.add("active");
         document.getElementById(button.dataset.tab).classList.add("active");
       });
+    });
+
+    function setResultLanguage(language) {
+      state.resultLanguage = language;
+      els.langButtons.forEach((button) => {
+        button.classList.toggle("active", button.dataset.lang === language);
+      });
+      if (state.latestReport) {
+        renderReport(state.latestReport);
+      }
+    }
+
+    els.langButtons.forEach((button) => {
+      button.addEventListener("click", () => setResultLanguage(button.dataset.lang));
     });
 
     els.submitBtn.addEventListener("click", runReview);
