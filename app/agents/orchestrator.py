@@ -132,6 +132,8 @@ def _context_builder_node(state: ReviewState) -> ReviewState:
         ctx = context_builder.build_context(
             diff_text=state.get("diff_text", ""),
             changed_files=state.get("changed_files", []),
+            repo_name=state.get("repo_name"),
+            repo_path=state.get("repo_path"),
         )
         state["project_context"] = ctx
         state["status"] = "context_ready"

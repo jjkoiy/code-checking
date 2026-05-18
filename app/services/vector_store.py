@@ -17,6 +17,7 @@ _COLLECTIONS = {
     "security_rules",
     "test_examples",
     "project_conventions",
+    "repository_context",
 }
 
 _SEED_DOCS: dict[str, list[dict[str, Any]]] = {
@@ -248,3 +249,27 @@ def vector_search(collection: str, query: str, top_k: int = 5) -> dict[str, Any]
         })
 
     return {"documents": documents}
+
+
+def vector_upsert(collection: str, documents: list[dict[str, Any]]) -> dict[str, Any]:
+    if not documents:
+        return {"indexed_count": 0, "skipped": False}
+
+    try:
+        chroma_collection = _get_collection(collection)
+        ids = [item["id"] for item in documents]
+        contents = [item["content"] for item in documents]
+        metadatas = [item.get("metadata", {}) for item in documents]
+        if hasattr(chroma_collection, "upsert"):
+            chroma_collection.upsert(ids=ids, documents=contents, metadatas=metadatas)
+        else:
+            chroma_collection.add(ids=ids, documents=contents, metadatas=metadatas)
+    except EmbeddingProviderError as exc:
+        logger.warning("Vector upsert skipped because embedding provider failed: %s", exc)
+        return {
+            "indexed_count": 0,
+            "skipped": True,
+            "skip_reason": str(exc),
+        }
+
+    return {"indexed_count": len(documents), "skipped": False}

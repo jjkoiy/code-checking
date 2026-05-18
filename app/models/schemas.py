@@ -156,3 +156,19 @@ class ReviewReportResponse(BaseModel):
     markdown_report: Optional[str] = None
     json_report: Optional[dict] = None
     generated_tests: List[Any] = Field(default_factory=list)
+
+
+class KnowledgeIndexRequest(BaseModel):
+    repo_name: Optional[str] = None
+    repo_path: str
+
+
+class KnowledgeIndexResponse(BaseModel):
+    status: str
+    repo_name: str
+    repo_path: str
+    indexed_files: int
+    indexed_chunks: int
+    skipped_files: int
+    embedding_skipped: bool = False
+    skip_reason: Optional[str] = None

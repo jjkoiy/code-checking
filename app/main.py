@@ -8,6 +8,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import init_db
+from app.routers.knowledge import router as knowledge_router
 from app.routers.reviews import router as reviews_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -29,6 +30,7 @@ app = FastAPI(
 )
 
 app.include_router(reviews_router)
+app.include_router(knowledge_router)
 app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
 
 

@@ -97,7 +97,12 @@ def parse_diff(diff_text: str) -> list[dict]:
     return files
 
 
-def build_context(diff_text: str, changed_files: list[dict] | None = None) -> dict:
+def build_context(
+    diff_text: str,
+    changed_files: list[dict] | None = None,
+    repo_name: str | None = None,
+    repo_path: str | None = None,
+) -> dict:
     """Build project_context from diff and changed files."""
     if changed_files is None:
         changed_files = parse_diff(diff_text)
@@ -110,6 +115,7 @@ def build_context(diff_text: str, changed_files: list[dict] | None = None) -> di
     search_query = " ".join(changed_modules + risk_hints + languages) or diff_text[:500]
     relevant_rules: list[dict] = []
     relevant_test_examples: list[dict] = []
+    relevant_project_context: list[dict] = []
     knowledge_skipped = False
     knowledge_skip_reasons: list[str] = []
     try:
@@ -124,6 +130,12 @@ def build_context(diff_text: str, changed_files: list[dict] | None = None) -> di
         if result.get("skipped"):
             knowledge_skipped = True
             knowledge_skip_reasons.append(str(result.get("skip_reason", "test_examples")))
+        if repo_name or repo_path:
+            result = vector_search("repository_context", search_query, top_k=5)
+            relevant_project_context.extend(result["documents"])
+            if result.get("skipped"):
+                knowledge_skipped = True
+                knowledge_skip_reasons.append(str(result.get("skip_reason", "repository_context")))
     except Exception as e:
         knowledge_skipped = True
         knowledge_skip_reasons.append(str(e))
@@ -135,6 +147,7 @@ def build_context(diff_text: str, changed_files: list[dict] | None = None) -> di
         "risk_hints": risk_hints,
         "relevant_rules": relevant_rules,
         "relevant_test_examples": relevant_test_examples,
+        "relevant_project_context": relevant_project_context,
         "knowledge_skipped": knowledge_skipped,
         "knowledge_skip_reasons": knowledge_skip_reasons,
         "context_summary": (

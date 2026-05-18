@@ -64,6 +64,9 @@ class Settings:
     agent_max_retry: int = int(os.getenv("AGENT_MAX_RETRY", "2"))
     validation_max_retry: int = int(os.getenv("VALIDATION_MAX_RETRY", "2"))
     agent_execution_mode: str = os.getenv("AGENT_EXECUTION_MODE", "sequential")
+    knowledge_max_files: int = int(os.getenv("KNOWLEDGE_MAX_FILES", "500"))
+    knowledge_max_file_chars: int = int(os.getenv("KNOWLEDGE_MAX_FILE_CHARS", "100000"))
+    knowledge_chunk_chars: int = int(os.getenv("KNOWLEDGE_CHUNK_CHARS", "2000"))
 
 
 settings = Settings()

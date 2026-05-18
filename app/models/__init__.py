@@ -11,6 +11,8 @@ from app.models.report import (
 from app.models.schemas import (
     CreateReviewRequest,
     CreateReviewResponse,
+    KnowledgeIndexRequest,
+    KnowledgeIndexResponse,
     ReviewTaskEventResponse,
     ReviewStatusResponse,
     ReviewReportResponse,

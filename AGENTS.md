@@ -67,6 +67,7 @@ GET /api/reviews/{task_id}/report
 | `POST /api/reviews` | Create a review task from diff and/or changed files |
 | `GET /api/reviews/{task_id}` | Get task status |
 | `GET /api/reviews/{task_id}/report` | Get final or in-progress report response |
+| `POST /api/knowledge/index` | Index repository files into Chroma for review context |
 
 The root web UI is served from `app/static/index.html` and provides a simple console for submitting unified Git diffs, polling review status, and viewing findings, Markdown, and JSON output.
 
@@ -114,6 +115,8 @@ Each node reads and updates `ReviewState`. If a node records an error, the final
 | `app/models/schemas.py` | Pydantic request/response schemas |
 | `app/models/state.py` | `ReviewState` and `Finding` TypedDicts |
 | `app/routers/reviews.py` | Review task API routes |
+| `app/routers/knowledge.py` | Knowledge indexing API route |
+| `app/services/knowledge_base.py` | Repository file indexing service |
 | `app/services/review_service.py` | Task CRUD, pipeline execution, result persistence |
 | `app/services/llm_client.py` | OpenAI-compatible chat completions client |
 | `app/services/llm_safety.py` | LLM mode selection and sensitive value redaction |
@@ -224,6 +227,9 @@ All configuration is loaded from environment variables.
 | `AGENT_MAX_RETRY` | `2` | Planned agent retry limit |
 | `VALIDATION_MAX_RETRY` | `2` | Planned validation retry limit |
 | `AGENT_EXECUTION_MODE` | `sequential` | Review pipeline mode; use `parallel` to run independent analysis stages concurrently |
+| `KNOWLEDGE_MAX_FILES` | `500` | Maximum files indexed per repository request |
+| `KNOWLEDGE_MAX_FILE_CHARS` | `100000` | Maximum characters read from a single indexed file |
+| `KNOWLEDGE_CHUNK_CHARS` | `2000` | Approximate text chunk size for repository indexing |
 
 ## Database
 
@@ -269,7 +275,7 @@ Run:
 Last verified result:
 
 ```text
-72 passed
+76 passed
 ```
 
 ## Docker
@@ -291,7 +297,7 @@ For persistent SQLite and Chroma data, mount a volume for `/app/data`.
 - `current_stage` is persisted through stage callbacks, but there is still no durable job history table.
 - LLM output is normalized before final reporting, but external LLM behavior still needs stronger production policy and observability.
 - Diff or source content may contain secrets; external LLM calls are gated and redacted by default, but production deployments should still review policy and audit requirements.
-- Chroma currently uses seed docs and deterministic hash embeddings, not a real project knowledge base.
+- Chroma can index repository files for project context, but there is no scheduled re-indexing or deletion sync yet.
 - Generated tests are drafts and are not automatically written to the target repo or executed.
 - Type checking is not clean yet.
 
