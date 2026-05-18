@@ -63,6 +63,7 @@ class Settings:
     review_max_total_content_chars: int = int(os.getenv("REVIEW_MAX_TOTAL_CONTENT_CHARS", "500000"))
     agent_max_retry: int = int(os.getenv("AGENT_MAX_RETRY", "2"))
     validation_max_retry: int = int(os.getenv("VALIDATION_MAX_RETRY", "2"))
+    agent_execution_mode: str = os.getenv("AGENT_EXECUTION_MODE", "sequential")
 
 
 settings = Settings()

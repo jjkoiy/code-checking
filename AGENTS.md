@@ -223,6 +223,7 @@ All configuration is loaded from environment variables.
 | `REVIEW_MAX_TOTAL_CONTENT_CHARS` | `500000` | Total raw changed file content size limit |
 | `AGENT_MAX_RETRY` | `2` | Planned agent retry limit |
 | `VALIDATION_MAX_RETRY` | `2` | Planned validation retry limit |
+| `AGENT_EXECUTION_MODE` | `sequential` | Review pipeline mode; use `parallel` to run independent analysis stages concurrently |
 
 ## Database
 
@@ -268,7 +269,7 @@ Run:
 Last verified result:
 
 ```text
-71 passed
+72 passed
 ```
 
 ## Docker

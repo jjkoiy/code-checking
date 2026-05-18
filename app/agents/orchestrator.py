@@ -6,10 +6,12 @@ import json
 import logging
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
 from langgraph.graph import StateGraph, END
 
+from app.config import settings
 from app.models.state import ReviewState
 from app.agents import context_builder, static_analysis, style_check
 from app.agents import security_scan, finding_aggregator, llm_review
@@ -404,6 +406,85 @@ def _get_graph():
     return _graph
 
 
+def _run_parallel_analysis_stage(state: ReviewState) -> ReviewState:
+    stage_specs = {
+        "static_analysis": (
+            "static_findings",
+            lambda: static_analysis.analyze(
+                diff_text=state.get("diff_text", ""),
+                changed_files=state.get("changed_files", []),
+            ),
+        ),
+        "style_check": (
+            "style_findings",
+            lambda: style_check.check(
+                changed_files=state.get("changed_files", []),
+                diff_text=state.get("diff_text", ""),
+            ),
+        ),
+        "security_scan": (
+            "security_findings",
+            lambda: security_scan.scan(
+                diff_text=state.get("diff_text", ""),
+                changed_files=state.get("changed_files", []),
+            ),
+        ),
+        "test_impact": (
+            "test_impact",
+            lambda: test_impact.analyze(
+                changed_files=state.get("changed_files", []),
+                diff_text=state.get("diff_text", ""),
+            ),
+        ),
+    }
+
+    for stage in stage_specs:
+        state["status"] = stage
+        _notify_stage_start(state, stage)
+
+    with ThreadPoolExecutor(max_workers=len(stage_specs)) as executor:
+        futures = {
+            executor.submit(callback): (stage, target_key)
+            for stage, (target_key, callback) in stage_specs.items()
+        }
+        for future in as_completed(futures):
+            stage, target_key = futures[future]
+            try:
+                state[target_key] = future.result()
+            except Exception as e:
+                logger.error("%s failed: %s", stage, e)
+                state["errors"].append({"agent": stage, "error": str(e)})
+                state[target_key] = {} if target_key == "test_impact" else []
+            finally:
+                state["status"] = stage
+                _notify_stage_end(state, stage)
+
+    return state
+
+
+def _run_parallel_pipeline(task_id: str, state: ReviewState) -> dict:
+    state["task_id"] = task_id
+    logger.info("Starting parallel review pipeline for task=%s", task_id)
+    try:
+        state = _context_builder_node(state)
+        state = _run_parallel_analysis_stage(state)
+        state = _finding_aggregator_node(state)
+        state = _llm_review_node(state)
+        state = _test_generation_node(state)
+        state = _validation_node(state)
+        state = _report_node(state)
+        logger.info("Parallel pipeline completed for task=%s, status=%s", task_id, state.get("status"))
+        return state.get("final_report", {})
+    except Exception as e:
+        logger.error("Parallel pipeline execution failed for task=%s: %s", task_id, e)
+        traceback.print_exc()
+        return {
+            "summary": f"Pipeline execution failed: {e}",
+            "markdown_report": f"# Error\n\nPipeline execution failed: {e}",
+            "json_report": {"error": str(e)},
+        }
+
+
 def run_review_pipeline(
     task_id: str,
     state: ReviewState,
@@ -421,6 +502,9 @@ def run_review_pipeline(
         state["on_stage_end"] = on_stage_end
 
     logger.info("Starting review pipeline for task=%s", task_id)
+    if settings.agent_execution_mode.strip().lower() == "parallel":
+        return _run_parallel_pipeline(task_id, state)
+
     try:
         graph = _get_graph()
         final_state = graph.invoke(state)
