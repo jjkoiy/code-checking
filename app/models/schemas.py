@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.config import settings
 
 
 # ── Request schemas ────────────────────────────────────────────
@@ -12,6 +15,33 @@ class ChangedFileIn(BaseModel):
     file_path: str
     language: Optional[str] = None
     content: Optional[str] = None
+
+    @field_validator("file_path")
+    @classmethod
+    def validate_file_path(cls, value: str) -> str:
+        file_path = value.strip()
+        normalized = file_path.replace("\\", "/")
+        if not file_path:
+            raise ValueError("file_path must not be empty")
+        if re.search(r"[\x00-\x1f\x7f]", file_path):
+            raise ValueError("file_path must not contain control characters")
+        if normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized):
+            raise ValueError("file_path must be a relative repository path")
+        if ".." in normalized:
+            raise ValueError("file_path must not contain '..'")
+        return file_path
+
+
+_GIT_DIFF_HEADER_RE = re.compile(r"^diff --git a/.+ b/.+$", re.MULTILINE)
+_GIT_DIFF_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", re.MULTILINE)
+
+
+def _looks_like_git_diff(diff_text: str) -> bool:
+    """Return whether text has enough unified Git diff structure to review."""
+    return bool(
+        _GIT_DIFF_HEADER_RE.search(diff_text)
+        and _GIT_DIFF_HUNK_RE.search(diff_text)
+    )
 
 
 class CreateReviewRequest(BaseModel):
@@ -22,6 +52,65 @@ class CreateReviewRequest(BaseModel):
     head_ref: Optional[str] = None
     diff_text: Optional[str] = None
     changed_files: List[ChangedFileIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_review_input(self) -> "CreateReviewRequest":
+        has_diff = bool(self.diff_text and self.diff_text.strip())
+        has_changed_files = bool(self.changed_files)
+        content_lengths = [
+            len(changed.content)
+            for changed in self.changed_files
+            if changed.content is not None
+        ]
+        has_content = any(changed.content and changed.content.strip() for changed in self.changed_files)
+        if not has_diff and not has_changed_files:
+            raise ValueError("diff_text or changed_files must be provided")
+        if not has_diff and not has_content:
+            raise ValueError("diff_text or non-empty changed_files.content must be provided")
+        if not has_diff:
+            missing_content = [
+                changed.file_path
+                for changed in self.changed_files
+                if not (changed.content and changed.content.strip())
+            ]
+            if missing_content:
+                raise ValueError(
+                    "changed_files.content must be provided for every changed file when diff_text is absent: "
+                    + ", ".join(missing_content)
+                )
+        if has_diff and not _looks_like_git_diff(self.diff_text or ""):
+            raise ValueError(
+                "diff_text must be a unified Git diff containing a 'diff --git' header "
+                "and at least one hunk header like '@@ -1 +1 @@'. "
+                "Use changed_files when submitting raw file content."
+            )
+        if len(self.changed_files) > settings.review_max_files:
+            raise ValueError(
+                f"changed_files exceeds REVIEW_MAX_FILES limit of {settings.review_max_files}"
+            )
+        if self.diff_text and len(self.diff_text) > settings.review_max_diff_chars:
+            raise ValueError(
+                f"diff_text exceeds REVIEW_MAX_DIFF_CHARS limit of {settings.review_max_diff_chars}"
+            )
+        oversized_files = [
+            changed.file_path
+            for changed in self.changed_files
+            if changed.content is not None
+            and len(changed.content) > settings.review_max_file_content_chars
+        ]
+        if oversized_files:
+            raise ValueError(
+                "changed_files.content exceeds REVIEW_MAX_FILE_CONTENT_CHARS limit of "
+                f"{settings.review_max_file_content_chars}: "
+                + ", ".join(oversized_files)
+            )
+        total_content_chars = sum(content_lengths)
+        if total_content_chars > settings.review_max_total_content_chars:
+            raise ValueError(
+                "changed_files content exceeds REVIEW_MAX_TOTAL_CONTENT_CHARS limit of "
+                f"{settings.review_max_total_content_chars}"
+            )
+        return self
 
 
 # ── Response schemas ────────────────────────────────────────────

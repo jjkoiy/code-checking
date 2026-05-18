@@ -46,6 +46,8 @@ class Settings:
     chroma_path: str = os.getenv("CHROMA_PATH", "./data/chroma")
     review_max_files: int = int(os.getenv("REVIEW_MAX_FILES", "20"))
     review_max_diff_chars: int = int(os.getenv("REVIEW_MAX_DIFF_CHARS", "60000"))
+    review_max_file_content_chars: int = int(os.getenv("REVIEW_MAX_FILE_CONTENT_CHARS", "200000"))
+    review_max_total_content_chars: int = int(os.getenv("REVIEW_MAX_TOTAL_CONTENT_CHARS", "500000"))
     agent_max_retry: int = int(os.getenv("AGENT_MAX_RETRY", "2"))
     validation_max_retry: int = int(os.getenv("VALIDATION_MAX_RETRY", "2"))
 
