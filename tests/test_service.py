@@ -63,8 +63,12 @@ def test_run_review_and_save_persists_completed_report(monkeypatch, tmp_path) ->
     )
 
     saved = review_service.run_review_and_save(task.id)
+    events = review_service.list_review_events(task.id)
 
     assert saved.status == "completed"
     assert saved.current_stage == "completed"
     assert json.loads(saved.report_json)["summary"] == "ok"
     assert json.loads(saved.findings_json)[0]["title"] == "Example finding"
+    assert events[0].stage == "created"
+    assert any(event.stage == "static_analysis" for event in events)
+    assert events[-1].status == "completed"

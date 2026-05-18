@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import ReviewTask, CreateReviewRequest
+from app.models import ReviewTask, ReviewTaskEvent, CreateReviewRequest
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,23 @@ def _load_changed_files(task: ReviewTask) -> list[dict]:
     return loaded if isinstance(loaded, list) else []
 
 
+def _record_event(
+    db: Session,
+    task_id: str,
+    stage: str,
+    status: str,
+    error_message: str | None = None,
+) -> ReviewTaskEvent:
+    event = ReviewTaskEvent(
+        task_id=task_id,
+        stage=stage,
+        status=status,
+        error_message=error_message,
+    )
+    db.add(event)
+    return event
+
+
 def create_review(req: CreateReviewRequest) -> ReviewTask:
     db: Session = SessionLocal()
     try:
@@ -50,6 +67,9 @@ def create_review(req: CreateReviewRequest) -> ReviewTask:
         db.add(task)
         db.commit()
         db.refresh(task)
+        _record_event(db, task.id, "created", "pending")
+        db.commit()
+        db.refresh(task)
         return task
     finally:
         db.close()
@@ -59,6 +79,19 @@ def get_review(task_id: str) -> Optional[ReviewTask]:
     db: Session = SessionLocal()
     try:
         return db.query(ReviewTask).filter(ReviewTask.id == task_id).first()
+    finally:
+        db.close()
+
+
+def list_review_events(task_id: str) -> list[ReviewTaskEvent]:
+    db: Session = SessionLocal()
+    try:
+        return (
+            db.query(ReviewTaskEvent)
+            .filter(ReviewTaskEvent.task_id == task_id)
+            .order_by(ReviewTaskEvent.created_at.asc(), ReviewTaskEvent.id.asc())
+            .all()
+        )
     finally:
         db.close()
 
@@ -102,6 +135,7 @@ def run_review_and_save(task_id: str) -> ReviewTask:
         task.status = "running"
         task.current_stage = "context_building"
         task.updated_at = _utcnow()
+        _record_event(db, task_id, "context_building", "running")
         db.commit()
 
         # Build changed_files from persisted request data, falling back to diff parsing.
@@ -142,6 +176,13 @@ def run_review_and_save(task_id: str) -> ReviewTask:
             if latest_error:
                 task.error_message = latest_error
             task.updated_at = _utcnow()
+            _record_event(
+                db,
+                task_id,
+                stage,
+                stage_state.get("status", task.status),
+                latest_error,
+            )
             try:
                 db.commit()
             except Exception as exc:
@@ -165,6 +206,7 @@ def run_review_and_save(task_id: str) -> ReviewTask:
         save_findings(db, task, findings)
         save_report(db, task, report_result.get("markdown_report", ""), json_report)
         task.updated_at = _utcnow()
+        _record_event(db, task_id, task.current_stage, task.status, task.error_message)
         db.commit()
         db.refresh(task)
 
@@ -179,6 +221,7 @@ def run_review_and_save(task_id: str) -> ReviewTask:
                 task.current_stage = "failed"
                 task.error_message = "Review pipeline failed; check server logs for details."
                 task.updated_at = _utcnow()
+                _record_event(db, task_id, "failed", "failed", task.error_message)
                 db.commit()
         except Exception:
             pass

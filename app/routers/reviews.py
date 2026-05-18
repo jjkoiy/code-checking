@@ -8,10 +8,11 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from app.models import (
     CreateReviewRequest,
     CreateReviewResponse,
+    ReviewTaskEventResponse,
     ReviewStatusResponse,
     ReviewReportResponse,
 )
-from app.services.review_service import create_review, get_review, run_review_and_save
+from app.services.review_service import create_review, get_review, list_review_events, run_review_and_save
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,24 @@ def get_review_status(task_id: str) -> ReviewStatusResponse:
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
+
+
+@router.get("/{task_id}/events", response_model=list[ReviewTaskEventResponse])
+def get_review_events(task_id: str) -> list[ReviewTaskEventResponse]:
+    task = get_review(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Review task not found")
+    return [
+        ReviewTaskEventResponse(
+            id=event.id,
+            task_id=event.task_id,
+            stage=event.stage,
+            status=event.status,
+            error_message=event.error_message,
+            created_at=event.created_at,
+        )
+        for event in list_review_events(task_id)
+    ]
 
 
 @router.get("/{task_id}/report", response_model=ReviewReportResponse)

@@ -120,6 +120,15 @@ class CreateReviewResponse(BaseModel):
     status: str
 
 
+class ReviewTaskEventResponse(BaseModel):
+    id: str
+    task_id: str
+    stage: str
+    status: str
+    error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
 class ReviewStatusResponse(BaseModel):
     task_id: str
     status: str
