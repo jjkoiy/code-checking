@@ -4,6 +4,9 @@ import json
 from types import SimpleNamespace
 from datetime import datetime, timezone
 
+from fastapi import BackgroundTasks
+
+from app.models import CreateReviewRequest
 from app.routers import reviews
 
 
@@ -63,3 +66,30 @@ def test_get_review_events_returns_task_timeline(monkeypatch) -> None:
 
     assert response[0].stage == "static_analysis"
     assert response[0].status == "running"
+
+
+def test_create_review_endpoint_dispatches_task(monkeypatch) -> None:
+    task = SimpleNamespace(id="task-4", status="pending")
+    dispatched: dict[str, str] = {}
+    monkeypatch.setattr(reviews, "create_review", lambda req: task)
+    monkeypatch.setattr(
+        reviews,
+        "dispatch_review_task",
+        lambda background, task_id: dispatched.setdefault("task_id", task_id),
+    )
+
+    response = reviews.create_review_endpoint(
+        CreateReviewRequest(
+            diff_text=(
+                "diff --git a/app/demo.py b/app/demo.py\n"
+                "--- a/app/demo.py\n"
+                "+++ b/app/demo.py\n"
+                "@@ -1 +1 @@\n"
+                "+print('hello')\n"
+            ),
+        ),
+        BackgroundTasks(),
+    )
+
+    assert response.task_id == "task-4"
+    assert dispatched == {"task_id": "task-4"}

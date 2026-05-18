@@ -12,19 +12,12 @@ from app.models import (
     ReviewStatusResponse,
     ReviewReportResponse,
 )
-from app.services.review_service import create_review, get_review, list_review_events, run_review_and_save
+from app.services.review_dispatcher import dispatch_review_task
+from app.services.review_service import create_review, get_review, list_review_events
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
-
-
-def _run_pipeline_background(task_id: str) -> None:
-    """Background task wrapper that catches all exceptions."""
-    try:
-        run_review_and_save(task_id)
-    except Exception as e:
-        logger.error("Background pipeline failed for task=%s: %s", task_id, e)
 
 
 def _load_report_json(raw_report: str | None) -> dict | None:
@@ -55,8 +48,7 @@ def create_review_endpoint(
     task = create_review(req)
     logger.info("Created review task: %s, dispatching pipeline.", task.id)
 
-    # Run the review pipeline in the background so the API returns immediately
-    background.add_task(_run_pipeline_background, task.id)
+    dispatch_review_task(background, task.id)
 
     return CreateReviewResponse(task_id=task.id, status=task.status)
 
