@@ -45,6 +45,40 @@ def _format_languages(languages: list[str]) -> str:
     return ", ".join(sorted(language for language in languages if language)) or "unknown"
 
 
+def _build_merge_recommendation(
+    blocking_count: int,
+    critical_count: int,
+    high_count: int,
+    medium_count: int,
+) -> dict:
+    if blocking_count or critical_count:
+        return {
+            "status": "block",
+            "label": "Do not merge yet",
+            "reason": (
+                "Resolve blocking or critical findings before merging. "
+                "These issues may introduce security, reliability, or correctness risk."
+            ),
+        }
+    if high_count:
+        return {
+            "status": "needs_review",
+            "label": "Human review required",
+            "reason": "High severity findings remain and should be reviewed before merge.",
+        }
+    if medium_count:
+        return {
+            "status": "caution",
+            "label": "Merge with caution",
+            "reason": "Medium severity findings remain; merge only if the team accepts the risk.",
+        }
+    return {
+        "status": "pass",
+        "label": "No blocking concerns",
+        "reason": "No blocking, critical, high, or medium severity findings were detected.",
+    }
+
+
 def generate(aggregated_findings: list[dict], llm_findings: list[dict],
              test_generation_result: dict, validation_result: dict,
              llm_mode: str = "mock",
@@ -74,8 +108,15 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
     high = [f for f in non_blocking if f.get("severity") == "high"]
     medium = [f for f in non_blocking if f.get("severity") == "medium"]
     low = [f for f in non_blocking if f.get("severity") == "low"]
+    high_risk_findings = blocking + critical + high
 
     total = len(all_findings)
+    merge_recommendation = _build_merge_recommendation(
+        blocking_count=len(blocking),
+        critical_count=len(critical),
+        high_count=len(high),
+        medium_count=len(medium),
+    )
     summary = (
         f"Review complete. {total} finding(s): "
         f"{len(blocking)} blocking; non-blocking severity: {len(critical)} critical, "
@@ -90,6 +131,10 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         "",
         summary,
         "",
+        "## Merge Recommendation",
+        "",
+        f"**{merge_recommendation['label']}** — {merge_recommendation['reason']}",
+        "",
         f"- **LLM mode**: `{llm_mode}`",
         "",
         "## Review Scope",
@@ -102,6 +147,21 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         "---",
         "",
     ]
+
+    if high_risk_findings:
+        md.append("## High-Risk Summary")
+        md.append("")
+        for f in high_risk_findings[:5]:
+            location = f"{f.get('file_path') or 'N/A'}:{f.get('line_number') or 'N/A'}"
+            md.append(
+                f"- **{f.get('severity', 'low').upper()}** "
+                f"{f.get('title', 'No title')} (`{location}`)"
+            )
+        if len(high_risk_findings) > 5:
+            md.append(f"- ...and {len(high_risk_findings) - 5} more high-risk finding(s).")
+        md.append("")
+        md.append("---")
+        md.append("")
 
     if blocking:
         md.append("## Blocking Issues")
@@ -214,6 +274,8 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         "high_count": len(high),
         "medium_count": len(medium),
         "low_count": len(low),
+        "merge_recommendation": merge_recommendation,
+        "high_risk_findings": high_risk_findings,
         "findings": all_findings,
         "test_suggestions": test_plan,
         "generated_tests": generated_tests,

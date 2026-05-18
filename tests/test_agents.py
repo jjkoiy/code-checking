@@ -423,6 +423,39 @@ def test_report_severity_counts_exclude_blocking_findings() -> None:
     assert "1 blocking; non-blocking severity: 0 critical, 1 high" in result["summary"]
     assert result["json_report"]["blocking_count"] == 1
     assert result["json_report"]["high_count"] == 1
+    assert result["json_report"]["merge_recommendation"]["status"] == "block"
+    assert "## Merge Recommendation" in result["markdown_report"]
+    assert "## High-Risk Summary" in result["markdown_report"]
+
+
+def test_report_merge_recommendation_allows_clean_review() -> None:
+    result = report.generate(
+        aggregated_findings=[],
+        llm_findings=[],
+        test_generation_result={},
+        validation_result={},
+    )
+
+    assert result["json_report"]["merge_recommendation"]["status"] == "pass"
+
+
+def test_report_merge_recommendation_flags_medium_risk_as_caution() -> None:
+    result = report.generate(
+        aggregated_findings=[
+            {
+                "severity": "medium",
+                "blocking": False,
+                "title": "Regression coverage gap",
+                "category": "reliability",
+                "confidence": 0.7,
+            },
+        ],
+        llm_findings=[],
+        test_generation_result={},
+        validation_result={},
+    )
+
+    assert result["json_report"]["merge_recommendation"]["status"] == "caution"
 
 
 def test_finding_aggregator_normalizes_and_drops_invalid_findings() -> None:

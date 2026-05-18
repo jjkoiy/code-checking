@@ -187,7 +187,7 @@
       font-weight: 700;
     }
 
-    input, textarea {
+    input, textarea, select {
       width: 100%;
       border: 1px solid #cfd6e2;
       border-radius: 6px;
@@ -197,7 +197,7 @@
       outline: none;
     }
 
-    input {
+    input, select {
       height: 38px;
       padding: 0 10px;
     }
@@ -212,7 +212,7 @@
       color: var(--code);
     }
 
-    input:focus, textarea:focus {
+    input:focus, textarea:focus, select:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
     }
@@ -284,6 +284,72 @@
     }
 
     .metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .merge-banner {
+      display: grid;
+      gap: 4px;
+      margin: 0 0 14px;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--muted);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfe;
+    }
+
+    .merge-banner strong {
+      font-size: 14px;
+    }
+
+    .merge-banner span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .merge-banner.block {
+      border-left-color: var(--danger);
+      background: #fff7f6;
+    }
+
+    .merge-banner.needs_review,
+    .merge-banner.caution {
+      border-left-color: var(--warning);
+      background: #fffbf0;
+    }
+
+    .merge-banner.pass {
+      border-left-color: var(--ok);
+      background: #f0fdf4;
+    }
+
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .high-risk {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .risk-item {
+      border: 1px solid #fecdca;
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff7f6;
+    }
+
+    .risk-item strong {
+      display: block;
+      font-size: 13px;
+    }
+
+    .risk-item span {
       color: var(--muted);
       font-size: 12px;
     }
@@ -460,6 +526,7 @@
       }
 
       .grid-2,
+      .filters,
       .summary {
         grid-template-columns: 1fr;
       }
@@ -522,12 +589,19 @@
         </div>
       </div>
       <div class="body">
+        <div class="merge-banner" id="mergeBanner">
+          <strong id="mergeLabel">No recommendation yet</strong>
+          <span id="mergeReason">Run a review to see the merge guidance.</span>
+        </div>
+
         <div class="summary">
           <div class="metric"><strong id="totalCount">0</strong><span>Total</span></div>
           <div class="metric"><strong id="blockingCount">0</strong><span>Blocking</span></div>
           <div class="metric"><strong id="highCount">0</strong><span>High/Critical</span></div>
           <div class="metric"><strong id="testsCount">0</strong><span>Draft tests</span></div>
         </div>
+
+        <div class="high-risk" id="highRiskList"></div>
       </div>
 
       <div class="tabs">
@@ -537,6 +611,38 @@
       </div>
 
       <div class="panel active" id="findingsPanel">
+        <div class="filters">
+          <div>
+            <label for="severityFilter">Severity</label>
+            <select id="severityFilter">
+              <option value="all">All severities</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+          <div>
+            <label for="categoryFilter">Category</label>
+            <select id="categoryFilter">
+              <option value="all">All categories</option>
+            </select>
+          </div>
+          <div>
+            <label for="fileFilter">File</label>
+            <select id="fileFilter">
+              <option value="all">All files</option>
+            </select>
+          </div>
+          <div>
+            <label for="blockingFilter">Status</label>
+            <select id="blockingFilter">
+              <option value="all">All statuses</option>
+              <option value="blocking">Blocking only</option>
+              <option value="non_blocking">Non-blocking</option>
+            </select>
+          </div>
+        </div>
         <div class="empty" id="findingsEmpty">No findings yet.</div>
         <div class="findings" id="findingsList"></div>
       </div>
@@ -570,6 +676,12 @@ index 1111111..2222222 100644
       pollTimer: null,
       resultLanguage: "en",
       latestReport: null,
+      filters: {
+        severity: "all",
+        category: "all",
+        file: "all",
+        blocking: "all",
+      },
     };
 
     const translations = {
@@ -699,10 +811,18 @@ index 1111111..2222222 100644
       message: document.getElementById("message"),
       taskDot: document.getElementById("taskDot"),
       taskStatus: document.getElementById("taskStatus"),
+      mergeBanner: document.getElementById("mergeBanner"),
+      mergeLabel: document.getElementById("mergeLabel"),
+      mergeReason: document.getElementById("mergeReason"),
       totalCount: document.getElementById("totalCount"),
       blockingCount: document.getElementById("blockingCount"),
       highCount: document.getElementById("highCount"),
       testsCount: document.getElementById("testsCount"),
+      highRiskList: document.getElementById("highRiskList"),
+      severityFilter: document.getElementById("severityFilter"),
+      categoryFilter: document.getElementById("categoryFilter"),
+      fileFilter: document.getElementById("fileFilter"),
+      blockingFilter: document.getElementById("blockingFilter"),
       findingsEmpty: document.getElementById("findingsEmpty"),
       findingsList: document.getElementById("findingsList"),
       markdownReport: document.getElementById("markdownReport"),
@@ -841,14 +961,32 @@ index 1111111..2222222 100644
 
     function resetResult() {
       state.latestReport = null;
+      state.filters = { severity: "all", category: "all", file: "all", blocking: "all" };
       els.totalCount.textContent = "0";
       els.blockingCount.textContent = "0";
       els.highCount.textContent = "0";
       els.testsCount.textContent = "0";
+      els.mergeBanner.className = "merge-banner";
+      els.mergeLabel.textContent = "No recommendation yet";
+      els.mergeReason.textContent = "Run a review to see the merge guidance.";
+      els.highRiskList.innerHTML = "";
+      els.severityFilter.value = "all";
+      resetSelect(els.categoryFilter, "All categories");
+      resetSelect(els.fileFilter, "All files");
+      els.blockingFilter.value = "all";
       els.findingsList.innerHTML = "";
       els.findingsEmpty.style.display = "block";
       els.markdownReport.textContent = "No report yet.";
       els.jsonReport.textContent = "No JSON yet.";
+    }
+
+    function resetSelect(select, label) {
+      select.innerHTML = "";
+      const option = document.createElement("option");
+      option.value = "all";
+      option.textContent = label;
+      select.appendChild(option);
+      select.value = "all";
     }
 
     function renderReport(report) {
@@ -866,10 +1004,91 @@ index 1111111..2222222 100644
       els.markdownReport.textContent = isZh ? buildChineseMarkdown(report) : (report.markdown_report || "No Markdown report.");
       els.jsonReport.textContent = JSON.stringify(isZh ? translateReportForDisplay(report) : report, null, 2);
 
-      els.findingsList.innerHTML = "";
-      els.findingsEmpty.style.display = findings.length ? "none" : "block";
+      renderMergeRecommendation(json.merge_recommendation);
+      renderHighRiskList(json.high_risk_findings || findings.filter((f) => f.blocking || f.severity === "critical" || f.severity === "high"));
+      populateFilters(findings);
+      renderFindings(findings);
+    }
 
-      for (const finding of findings) {
+    function renderMergeRecommendation(recommendation) {
+      const rec = recommendation || {
+        status: "pass",
+        label: "No blocking concerns",
+        reason: "No merge recommendation was included in this report.",
+      };
+      const isZh = state.resultLanguage === "zh";
+      els.mergeBanner.className = `merge-banner ${rec.status || "pass"}`;
+      els.mergeLabel.textContent = isZh ? translateMergeLabel(rec.status, rec.label) : rec.label;
+      els.mergeReason.textContent = isZh ? translateMergeReason(rec.status, rec.reason) : rec.reason;
+    }
+
+    function renderHighRiskList(findings) {
+      const isZh = state.resultLanguage === "zh";
+      els.highRiskList.innerHTML = "";
+      for (const finding of findings.slice(0, 3)) {
+        const item = document.createElement("div");
+        item.className = "risk-item";
+        const translated = isZh ? translateFinding(finding) : finding;
+        item.innerHTML = `
+          <strong>${escapeHtml(translated.title || (isZh ? "未命名问题" : "Untitled finding"))}</strong>
+          <span>${escapeHtml(String(finding.severity || "low").toUpperCase())} · <code>${escapeHtml(finding.file_path || "N/A")}:${escapeHtml(String(finding.line_number || "N/A"))}</code></span>
+        `;
+        els.highRiskList.appendChild(item);
+      }
+    }
+
+    function populateFilters(findings) {
+      const currentCategory = state.filters.category;
+      const currentFile = state.filters.file;
+      const categories = [...new Set(findings.map((f) => f.category || "uncategorized"))].sort();
+      const files = [...new Set(findings.map((f) => f.file_path || "N/A"))].sort();
+      fillSelect(els.categoryFilter, "All categories", categories, currentCategory, (value) => state.resultLanguage === "zh" ? translateCategory(value) : value);
+      fillSelect(els.fileFilter, "All files", files, currentFile);
+    }
+
+    function fillSelect(select, allLabel, values, selectedValue, labeler = (value) => value) {
+      select.innerHTML = "";
+      const allOption = document.createElement("option");
+      allOption.value = "all";
+      allOption.textContent = allLabel;
+      select.appendChild(allOption);
+      for (const value of values) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = labeler(value);
+        select.appendChild(option);
+      }
+      select.value = values.includes(selectedValue) ? selectedValue : "all";
+      if (select.value === "all") {
+        if (select === els.categoryFilter) state.filters.category = "all";
+        if (select === els.fileFilter) state.filters.file = "all";
+      }
+    }
+
+    function filteredFindings(findings) {
+      return findings.filter((finding) => {
+        const severity = String(finding.severity || "low").toLowerCase();
+        const category = finding.category || "uncategorized";
+        const file = finding.file_path || "N/A";
+        if (state.filters.severity !== "all" && severity !== state.filters.severity) return false;
+        if (state.filters.category !== "all" && category !== state.filters.category) return false;
+        if (state.filters.file !== "all" && file !== state.filters.file) return false;
+        if (state.filters.blocking === "blocking" && !finding.blocking) return false;
+        if (state.filters.blocking === "non_blocking" && finding.blocking) return false;
+        return true;
+      });
+    }
+
+    function renderFindings(findings) {
+      const visibleFindings = filteredFindings(findings);
+      const isZh = state.resultLanguage === "zh";
+      els.findingsList.innerHTML = "";
+      els.findingsEmpty.style.display = visibleFindings.length ? "none" : "block";
+      els.findingsEmpty.textContent = findings.length
+        ? (isZh ? "当前筛选条件下没有问题。" : "No findings match the current filters.")
+        : (isZh ? "还没有问题。" : "No findings yet.");
+
+      for (const finding of visibleFindings) {
         const item = document.createElement("article");
         item.className = "finding";
         const severity = String(finding.severity || "low").toLowerCase();
@@ -893,6 +1112,26 @@ index 1111111..2222222 100644
         `;
         els.findingsList.appendChild(item);
       }
+    }
+
+    function translateMergeLabel(status, fallback) {
+      const labels = {
+        block: "暂不建议合并",
+        needs_review: "需要人工复核",
+        caution: "谨慎合并",
+        pass: "无阻塞风险",
+      };
+      return labels[String(status || "pass")] || fallback;
+    }
+
+    function translateMergeReason(status, fallback) {
+      const reasons = {
+        block: "请先解决阻塞或严重问题，再继续合并。",
+        needs_review: "仍有高危问题，合并前需要人工确认风险。",
+        caution: "仍有中危问题，团队接受风险后再合并。",
+        pass: "未发现阻塞、严重、高危或中危问题。",
+      };
+      return reasons[String(status || "pass")] || fallback;
     }
 
     function translateSeverity(severity) {
@@ -925,7 +1164,13 @@ index 1111111..2222222 100644
       const translatedJson = {
         ...json,
         summary: buildChineseSummary(json),
+        merge_recommendation: json.merge_recommendation ? {
+          ...json.merge_recommendation,
+          label: translateMergeLabel(json.merge_recommendation.status, json.merge_recommendation.label),
+          reason: translateMergeReason(json.merge_recommendation.status, json.merge_recommendation.reason),
+        } : undefined,
         findings: (json.findings || []).map(translateFinding),
+        high_risk_findings: (json.high_risk_findings || []).map(translateFinding),
         test_suggestions: (json.test_suggestions || []).map((item) => ({
           ...item,
           name: translateText(item.name),
@@ -1017,16 +1262,21 @@ index 1111111..2222222 100644
       const sections = [
         ["阻塞问题", findings.filter((f) => f.blocking)],
         ["严重问题", findings.filter((f) => f.severity === "critical" && !f.blocking)],
-        ["高危问题", findings.filter((f) => f.severity === "high")],
+        ["高危问题", findings.filter((f) => f.severity === "high" && !f.blocking)],
         ["中危问题", findings.filter((f) => f.severity === "medium")],
         ["低危问题", findings.filter((f) => f.severity === "low")],
       ];
+      const recommendation = json.merge_recommendation || {};
       const md = [
         "# 代码审查报告",
         "",
         "## 摘要",
         "",
         buildChineseSummary(json),
+        "",
+        "## 合并建议",
+        "",
+        `**${translateMergeLabel(recommendation.status, recommendation.label || "无阻塞风险")}** — ${translateMergeReason(recommendation.status, recommendation.reason || "")}`,
         "",
         "---",
         "",
@@ -1109,9 +1359,20 @@ index 1111111..2222222 100644
       }
     }
 
+    function updateFilter(key, value) {
+      state.filters[key] = value;
+      if (state.latestReport) {
+        renderReport(state.latestReport);
+      }
+    }
+
     els.langButtons.forEach((button) => {
       button.addEventListener("click", () => setResultLanguage(button.dataset.lang));
     });
+    els.severityFilter.addEventListener("change", () => updateFilter("severity", els.severityFilter.value));
+    els.categoryFilter.addEventListener("change", () => updateFilter("category", els.categoryFilter.value));
+    els.fileFilter.addEventListener("change", () => updateFilter("file", els.fileFilter.value));
+    els.blockingFilter.addEventListener("change", () => updateFilter("blocking", els.blockingFilter.value));
 
     els.submitBtn.addEventListener("click", runReview);
     els.sampleBtn.addEventListener("click", () => {
