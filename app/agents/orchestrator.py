@@ -131,12 +131,16 @@ def _finding_aggregator_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: aggregating")
     state["status"] = "aggregating"
     try:
+        validation_warnings = state.setdefault("validation_warnings", [])
         all_raw = (
             state.get("static_findings", [])
             + state.get("style_findings", [])
             + state.get("security_findings", [])
         )
-        aggregated = finding_aggregator.aggregate(all_raw)
+        aggregated = finding_aggregator.aggregate(
+            all_raw,
+            validation_warnings=validation_warnings,
+        )
         state["aggregated_findings"] = aggregated
     except Exception as e:
         logger.error("Aggregator failed: %s", e)
@@ -156,7 +160,12 @@ def _llm_review_node(state: ReviewState) -> ReviewState:
             aggregated_findings=state.get("aggregated_findings", []),
             project_context=state.get("project_context", {}),
         )
-        state["llm_findings"] = findings
+        validation_warnings = state.setdefault("validation_warnings", [])
+        state["aggregated_findings"] = finding_aggregator.aggregate(
+            state.get("aggregated_findings", []) + findings,
+            validation_warnings=validation_warnings,
+        )
+        state["llm_findings"] = []
     except Exception as e:
         logger.error("LLM review failed: %s", e)
         state["errors"].append({"agent": "llm_review", "error": str(e)})
@@ -207,6 +216,7 @@ def _report_node(state: ReviewState) -> ReviewState:
             test_generation_result=state.get("test_generation_result", {}),
             validation_result=state.get("validation_result", {}),
             llm_mode=state.get("llm_mode", llm_mode()),
+            validation_warnings=state.get("validation_warnings", []),
         )
         if state.get("errors"):
             result.setdefault("json_report", {})["error"] = "One or more review stages failed."

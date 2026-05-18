@@ -1,4 +1,5 @@
 from app.models.review_task import ReviewTask
+from app.models.findings import FindingModel
 from app.models.schemas import (
     CreateReviewRequest,
     CreateReviewResponse,

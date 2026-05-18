@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from app.agents import llm_review, report, security_scan, static_analysis, style_check, test_generation, test_impact
+from app.agents import (
+    finding_aggregator,
+    llm_review,
+    report,
+    security_scan,
+    static_analysis,
+    style_check,
+    test_generation,
+    test_impact,
+)
 from app.agents.diff_utils import iter_added_lines
 
 
@@ -277,3 +286,71 @@ def test_report_severity_counts_exclude_blocking_findings() -> None:
     assert "1 blocking; non-blocking severity: 0 critical, 1 high" in result["summary"]
     assert result["json_report"]["blocking_count"] == 1
     assert result["json_report"]["high_count"] == 1
+
+
+def test_finding_aggregator_normalizes_and_drops_invalid_findings() -> None:
+    warnings: list[dict] = []
+
+    result = finding_aggregator.aggregate(
+        [
+            {
+                "agent_name": "llm_review_agent",
+                "severity": "HIGH",
+                "category": "security",
+                "file_path": "app/demo.py",
+                "line_number": 2,
+                "title": "Potential injection",
+                "description": "User input reaches a query.",
+                "evidence": "query = f'SELECT {user}'",
+                "suggestion": "Use parameters.",
+                "confidence": "0.9",
+            },
+            {
+                "agent_name": "llm_review_agent",
+                "severity": "severe",
+                "category": "security",
+                "file_path": "app/demo.py",
+                "line_number": 3,
+                "title": "Bad severity",
+                "description": "This should be dropped.",
+                "confidence": 0.9,
+            },
+            {
+                "agent_name": "llm_review_agent",
+                "severity": "medium",
+                "category": "security",
+                "file_path": "app/demo.py",
+                "line_number": 4,
+                "description": "Missing title should be dropped.",
+                "confidence": 0.8,
+            },
+        ],
+        validation_warnings=warnings,
+    )
+
+    assert len(result) == 1
+    assert result[0]["severity"] == "high"
+    assert result[0]["confidence"] == 0.9
+    assert result[0]["blocking"] is True
+    assert len(warnings) == 2
+
+
+def test_report_consumes_only_final_normalized_findings() -> None:
+    result = report.generate(
+        aggregated_findings=[],
+        llm_findings=[
+            {
+                "agent_name": "llm_review_agent",
+                "severity": "critical",
+                "category": "security",
+                "title": "Raw LLM finding",
+                "description": "This raw output was not normalized.",
+                "confidence": 1.0,
+            }
+        ],
+        test_generation_result={},
+        validation_result={},
+    )
+
+    assert result["json_report"]["total_findings"] == 0
+    assert "Raw LLM finding" not in result["markdown_report"]

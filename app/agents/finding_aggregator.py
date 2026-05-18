@@ -6,6 +6,8 @@ import logging
 import uuid
 from difflib import SequenceMatcher
 
+from app.models.findings import normalize_findings
+
 logger = logging.getLogger(__name__)
 
 _SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
@@ -58,8 +60,15 @@ def _is_blocking(finding: dict) -> bool:
     return False
 
 
-def aggregate(findings: list[dict]) -> list[dict]:
+def aggregate(
+    findings: list[dict],
+    validation_warnings: list[dict] | None = None,
+) -> list[dict]:
     """Dedup findings by file+category+similarity, normalize severity, mark blocking."""
+    if not findings:
+        return []
+
+    findings = normalize_findings(findings, validation_warnings=validation_warnings)
     if not findings:
         return []
 
@@ -80,9 +89,9 @@ def aggregate(findings: list[dict]) -> list[dict]:
 
         if duplicate:
             sources: list[str] = duplicate.setdefault("source_agents", [])
-            agent_name = finding.get("agent_name", "")
-            if agent_name not in sources:
-                sources.append(agent_name)
+            for agent_name in finding.get("source_agents") or [finding.get("agent_name", "unknown")]:
+                if agent_name not in sources:
+                    sources.append(agent_name)
             duplicate["confidence"] = max(
                 duplicate.get("confidence", 0), finding.get("confidence", 0)
             )
@@ -91,7 +100,9 @@ def aggregate(findings: list[dict]) -> list[dict]:
             )
         else:
             finding["id"] = uuid.uuid4().hex[:10]
-            finding["source_agents"] = [finding.get("agent_name", "unknown")]
+            finding["source_agents"] = finding.get("source_agents") or [
+                finding.get("agent_name", "unknown")
+            ]
             finding["severity"] = _normalize_severity(finding)
             finding["blocking"] = _is_blocking(finding)
             deduped.append(finding)

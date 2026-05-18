@@ -16,6 +16,8 @@ class Finding(TypedDict, total=False):
     suggestion: str
     confidence: float
     blocking: Optional[bool]
+    attack_scenario: Optional[str]
+    source_agents: List[str]
 
 
 class ReviewState(TypedDict, total=False):
@@ -43,6 +45,7 @@ class ReviewState(TypedDict, total=False):
 
     test_generation_result: Dict[str, Any]
     validation_result: Dict[str, Any]
+    validation_warnings: List[Dict[str, Any]]
 
     final_report: Dict[str, Any]
 
