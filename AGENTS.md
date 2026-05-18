@@ -204,6 +204,10 @@ All configuration is loaded from environment variables.
 |---|---|---|
 | `APP_ENV` | `development` | App environment |
 | `DATABASE_URL` | `sqlite:///./data/app.db` | Database connection URL |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis broker/backend for Celery and rate limiting |
+| `API_AUTH_ENABLED` | `false` | Require `X-API-Key` for review APIs |
+| `API_KEYS` | empty | Comma-separated accepted API keys |
+| `RATE_LIMIT_REQUESTS_PER_MINUTE` | `60` | Per-key/IP fixed-window API limit |
 | `LLM_PROVIDER` | `mock` | LLM provider; use `mock` for local heuristic mode |
 | `LLM_MODEL` | `mock-reviewer` | LLM model name |
 | `LLM_API_KEY` | empty | LLM API key |
@@ -263,7 +267,7 @@ Run:
 Last verified result:
 
 ```text
-64 passed
+69 passed
 ```
 
 ## Docker
@@ -279,7 +283,7 @@ For persistent SQLite and Chroma data, mount a volume for `/app/data`.
 
 ## Current Limitations
 
-- No authentication, authorization, rate limiting, or tenant isolation yet.
+- API Key authentication and Redis-backed rate limiting are available, but there is no user, role, or tenant model yet.
 - Input size limits are enforced by request schemas, but API/server-level body limits are not configured yet.
 - Review execution now uses Celery and Redis, but there is no task administration UI or dead-letter workflow yet.
 - `current_stage` is persisted through stage callbacks, but there is still no durable job history table.

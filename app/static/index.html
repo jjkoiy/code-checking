@@ -564,6 +564,9 @@
           </div>
         </div>
 
+        <label for="apiKey">API key</label>
+        <input id="apiKey" type="password" autocomplete="off" placeholder="Optional when API auth is disabled">
+
         <label for="diffText">Git diff</label>
         <textarea id="diffText" spellcheck="false"></textarea>
 
@@ -804,6 +807,7 @@ index 1111111..2222222 100644
       healthText: document.getElementById("healthText"),
       repoName: document.getElementById("repoName"),
       sourceType: document.getElementById("sourceType"),
+      apiKey: document.getElementById("apiKey"),
       diffText: document.getElementById("diffText"),
       submitBtn: document.getElementById("submitBtn"),
       sampleBtn: document.getElementById("sampleBtn"),
@@ -847,6 +851,23 @@ index 1111111..2222222 100644
       if (state.pollTimer) {
         clearInterval(state.pollTimer);
         state.pollTimer = null;
+      }
+    }
+
+    function apiHeaders(includeJson = false) {
+      const headers = {};
+      if (includeJson) headers["Content-Type"] = "application/json";
+      const apiKey = els.apiKey.value.trim();
+      if (apiKey) headers["X-API-Key"] = apiKey;
+      return headers;
+    }
+
+    function saveApiKey() {
+      const apiKey = els.apiKey.value.trim();
+      if (apiKey) {
+        localStorage.setItem("agentReviewApiKey", apiKey);
+      } else {
+        localStorage.removeItem("agentReviewApiKey");
       }
     }
 
@@ -900,7 +921,7 @@ index 1111111..2222222 100644
       try {
         const response = await fetch("/api/reviews", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: apiHeaders(true),
           body: JSON.stringify({
             source_type: els.sourceType.value.trim() || "ui",
             repo_name: els.repoName.value.trim() || "local-demo",
@@ -932,7 +953,9 @@ index 1111111..2222222 100644
       if (!state.taskId) return;
 
       try {
-        const statusResponse = await fetch(`/api/reviews/${state.taskId}`);
+        const statusResponse = await fetch(`/api/reviews/${state.taskId}`, {
+          headers: apiHeaders(),
+        });
         if (!statusResponse.ok) throw new Error(`status HTTP ${statusResponse.status}`);
         const status = await statusResponse.json();
         setTaskStatus(status.status);
@@ -944,7 +967,9 @@ index 1111111..2222222 100644
 
         stopPolling();
 
-        const reportResponse = await fetch(`/api/reviews/${state.taskId}/report`);
+        const reportResponse = await fetch(`/api/reviews/${state.taskId}/report`, {
+          headers: apiHeaders(),
+        });
         if (!reportResponse.ok) {
           const text = await reportResponse.text();
           throw new Error(text || `report HTTP ${reportResponse.status}`);
@@ -1373,6 +1398,7 @@ index 1111111..2222222 100644
     els.categoryFilter.addEventListener("change", () => updateFilter("category", els.categoryFilter.value));
     els.fileFilter.addEventListener("change", () => updateFilter("file", els.fileFilter.value));
     els.blockingFilter.addEventListener("change", () => updateFilter("blocking", els.blockingFilter.value));
+    els.apiKey.addEventListener("change", saveApiKey);
 
     els.submitBtn.addEventListener("click", runReview);
     els.sampleBtn.addEventListener("click", () => {
@@ -1388,6 +1414,7 @@ index 1111111..2222222 100644
       setMessage("Ready.");
     });
 
+    els.apiKey.value = localStorage.getItem("agentReviewApiKey") || "";
     els.diffText.value = sampleDiff;
     checkHealth();
   </script>

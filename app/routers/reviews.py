@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.models import (
     CreateReviewRequest,
@@ -14,10 +14,11 @@ from app.models import (
 )
 from app.services.review_dispatcher import dispatch_review_task
 from app.services.review_service import create_review, get_review, list_review_events
+from app.services.auth import require_api_access
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/reviews", tags=["reviews"])
+router = APIRouter(prefix="/api/reviews", tags=["reviews"], dependencies=[Depends(require_api_access)])
 
 
 def _load_report_json(raw_report: str | None) -> dict | None:
