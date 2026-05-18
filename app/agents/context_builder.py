@@ -110,11 +110,23 @@ def build_context(diff_text: str, changed_files: list[dict] | None = None) -> di
     search_query = " ".join(changed_modules + risk_hints + languages) or diff_text[:500]
     relevant_rules: list[dict] = []
     relevant_test_examples: list[dict] = []
+    knowledge_skipped = False
+    knowledge_skip_reasons: list[str] = []
     try:
-        relevant_rules.extend(vector_search("review_rules", search_query, top_k=3)["documents"])
-        relevant_rules.extend(vector_search("security_rules", search_query, top_k=3)["documents"])
-        relevant_test_examples.extend(vector_search("test_examples", search_query, top_k=3)["documents"])
+        for collection in ("review_rules", "security_rules"):
+            result = vector_search(collection, search_query, top_k=3)
+            relevant_rules.extend(result["documents"])
+            if result.get("skipped"):
+                knowledge_skipped = True
+                knowledge_skip_reasons.append(str(result.get("skip_reason", collection)))
+        result = vector_search("test_examples", search_query, top_k=3)
+        relevant_test_examples.extend(result["documents"])
+        if result.get("skipped"):
+            knowledge_skipped = True
+            knowledge_skip_reasons.append(str(result.get("skip_reason", "test_examples")))
     except Exception as e:
+        knowledge_skipped = True
+        knowledge_skip_reasons.append(str(e))
         logger.warning("Vector context lookup skipped: %s", e)
 
     return {
@@ -123,6 +135,8 @@ def build_context(diff_text: str, changed_files: list[dict] | None = None) -> di
         "risk_hints": risk_hints,
         "relevant_rules": relevant_rules,
         "relevant_test_examples": relevant_test_examples,
+        "knowledge_skipped": knowledge_skipped,
+        "knowledge_skip_reasons": knowledge_skip_reasons,
         "context_summary": (
             f"{len(changed_files)} file(s) changed in {len(languages)} language(s). "
             f"Risk keywords found: {', '.join(risk_hints) if risk_hints else 'none'}."

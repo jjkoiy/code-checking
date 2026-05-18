@@ -84,11 +84,13 @@ def _report_metadata(state: ReviewState) -> dict:
     duration_seconds = None
     if isinstance(started_at, float):
         duration_seconds = round(time.perf_counter() - started_at, 3)
+    project_context = state.get("project_context", {})
     return {
         "agent_count": len(_PIPELINE_STAGES),
         "duration_seconds": duration_seconds,
         "llm_mode": state.get("llm_mode", llm_mode()),
         "pipeline_status": "failed" if state.get("errors") else "completed",
+        "knowledge_skipped": bool(project_context.get("knowledge_skipped")),
     }
 
 
