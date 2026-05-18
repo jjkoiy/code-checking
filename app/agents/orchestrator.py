@@ -58,14 +58,22 @@ def _review_scope(state: ReviewState) -> dict:
         int(changed.get("added_lines", 0) or 0)
         for changed in changed_files
     )
-    has_content = bool(state.get("diff_text", "").strip()) or any(
+    has_diff = bool(state.get("diff_text", "").strip())
+    has_raw_content = any(
         changed.get("content") and str(changed.get("content")).strip()
         for changed in changed_files
     )
+    has_content = has_diff or has_raw_content
+    if has_diff:
+        mode = "added_lines_only"
+    elif has_raw_content:
+        mode = "raw_content"
+    else:
+        mode = "empty"
     return {
         "file_count": len(changed_files),
         "languages": languages,
-        "mode": "added_lines_only",
+        "mode": mode,
         "added_lines": added_lines,
         "has_reviewable_content": has_content,
     }

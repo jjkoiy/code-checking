@@ -432,6 +432,9 @@ def test_report_distinguishes_no_reviewable_content() -> None:
     )
 
     assert "[WARN] No reviewable content was available" in result["markdown_report"]
+    assert result["summary"].startswith("Review completed without reviewable content.")
+    assert result["json_report"]["merge_recommendation"]["status"] == "caution"
+    assert result["json_report"]["merge_recommendation"]["label"] == "No reviewable content"
 
 
 def test_report_severity_counts_exclude_blocking_findings() -> None:

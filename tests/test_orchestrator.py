@@ -25,6 +25,30 @@ def test_merge_changed_files_preserves_request_content_and_adds_diff_metadata() 
     }]
 
 
+def test_review_scope_reports_raw_content_mode() -> None:
+    scope = orchestrator._review_scope({
+        "diff_text": "",
+        "changed_files": [{
+            "file_path": "app/demo.py",
+            "language": "python",
+            "content": "print('hello')",
+        }],
+    })
+
+    assert scope["mode"] == "raw_content"
+    assert scope["has_reviewable_content"] is True
+
+
+def test_review_scope_reports_empty_mode() -> None:
+    scope = orchestrator._review_scope({
+        "diff_text": "",
+        "changed_files": [],
+    })
+
+    assert scope["mode"] == "empty"
+    assert scope["has_reviewable_content"] is False
+
+
 def test_report_node_marks_pipeline_errors_as_failed() -> None:
     state = {
         "aggregated_findings": [],

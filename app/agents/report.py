@@ -50,7 +50,17 @@ def _build_merge_recommendation(
     critical_count: int,
     high_count: int,
     medium_count: int,
+    has_reviewable_content: bool = True,
 ) -> dict:
+    if not has_reviewable_content:
+        return {
+            "status": "caution",
+            "label": "No reviewable content",
+            "reason": (
+                "The review did not receive diff lines or changed file content, "
+                "so the result should not be treated as a clean pass."
+            ),
+        }
     if blocking_count or critical_count:
         return {
             "status": "block",
@@ -111,17 +121,25 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
     high_risk_findings = blocking + critical + high
 
     total = len(all_findings)
+    has_reviewable_content = review_scope.get("has_reviewable_content", True)
     merge_recommendation = _build_merge_recommendation(
         blocking_count=len(blocking),
         critical_count=len(critical),
         high_count=len(high),
         medium_count=len(medium),
+        has_reviewable_content=has_reviewable_content,
     )
-    summary = (
-        f"Review complete. {total} finding(s): "
-        f"{len(blocking)} blocking; non-blocking severity: {len(critical)} critical, "
-        f"{len(high)} high, {len(medium)} medium, {len(low)} low."
-    )
+    if has_reviewable_content:
+        summary = (
+            f"Review complete. {total} finding(s): "
+            f"{len(blocking)} blocking; non-blocking severity: {len(critical)} critical, "
+            f"{len(high)} high, {len(medium)} medium, {len(low)} low."
+        )
+    else:
+        summary = (
+            "Review completed without reviewable content. "
+            "Provide a unified diff or changed file content to receive meaningful findings."
+        )
 
     # Build Markdown report
     md: list[str] = [
@@ -204,7 +222,7 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         md.append("")
 
     if not all_findings:
-        if review_scope.get("has_reviewable_content", True):
+        if has_reviewable_content:
             md.append("[OK] No issues found in this review.")
         else:
             md.append("[WARN] No reviewable content was available for this review.")
