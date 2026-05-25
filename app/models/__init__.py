@@ -10,6 +10,7 @@ from app.models.report import (
 )
 from app.models.schemas import (
     CreateReviewRequest,
+    CreateGitReviewRequest,
     CreateReviewResponse,
     KnowledgeIndexRequest,
     KnowledgeIndexResponse,

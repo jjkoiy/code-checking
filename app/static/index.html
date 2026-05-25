@@ -381,6 +381,41 @@
       border-bottom-color: var(--accent);
     }
 
+    .input-tabs {
+      display: flex;
+      gap: 4px;
+      margin: 14px 0 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .input-tab {
+      height: 38px;
+      padding: 0 12px;
+      background: transparent;
+      color: var(--muted);
+      border: 0;
+      border-radius: 0;
+      border-bottom: 2px solid transparent;
+    }
+
+    .input-tab:hover {
+      background: transparent;
+      color: var(--text);
+    }
+
+    .input-tab.active {
+      color: var(--accent-dark);
+      border-bottom-color: var(--accent);
+    }
+
+    .input-panel {
+      display: none;
+    }
+
+    .input-panel.active {
+      display: block;
+    }
+
     .panel {
       display: none;
       padding: 16px;
@@ -567,13 +602,41 @@
         <label for="apiKey">API key</label>
         <input id="apiKey" type="password" autocomplete="off" placeholder="Optional when API auth is disabled">
 
-        <label for="diffText">Git diff</label>
-        <textarea id="diffText" spellcheck="false"></textarea>
+        <div class="input-tabs" aria-label="Review input source">
+          <button class="input-tab active" type="button" data-input-tab="pasteDiffPanel">Paste Diff</button>
+          <button class="input-tab" type="button" data-input-tab="localGitPanel">Local Git</button>
+        </div>
 
-        <div class="actions">
-          <button id="submitBtn" type="button">Run Review</button>
-          <button id="sampleBtn" class="secondary" type="button">Load Sample</button>
-          <button id="clearBtn" class="secondary" type="button">Clear</button>
+        <div class="input-panel active" id="pasteDiffPanel">
+          <label for="diffText">Git diff</label>
+          <textarea id="diffText" spellcheck="false"></textarea>
+
+          <div class="actions">
+            <button id="submitBtn" type="button">Run Review</button>
+            <button id="sampleBtn" class="secondary" type="button">Load Sample</button>
+            <button id="clearBtn" class="secondary" type="button">Clear</button>
+          </div>
+        </div>
+
+        <div class="input-panel" id="localGitPanel">
+          <label for="gitRepoPath">Repo path</label>
+          <input id="gitRepoPath" placeholder="C:/Users/ROG/Desktop/my-project">
+
+          <div class="grid-2">
+            <div>
+              <label for="gitBaseRef">Base ref</label>
+              <input id="gitBaseRef" value="main">
+            </div>
+            <div>
+              <label for="gitHeadRef">Head ref</label>
+              <input id="gitHeadRef" placeholder="feature/login">
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="gitSubmitBtn" type="button">Run Git Review</button>
+            <button id="gitClearBtn" class="secondary" type="button">Clear</button>
+          </div>
         </div>
 
         <div class="toast" id="message">Ready.</div>
@@ -809,9 +872,14 @@ index 1111111..2222222 100644
       sourceType: document.getElementById("sourceType"),
       apiKey: document.getElementById("apiKey"),
       diffText: document.getElementById("diffText"),
+      gitRepoPath: document.getElementById("gitRepoPath"),
+      gitBaseRef: document.getElementById("gitBaseRef"),
+      gitHeadRef: document.getElementById("gitHeadRef"),
       submitBtn: document.getElementById("submitBtn"),
+      gitSubmitBtn: document.getElementById("gitSubmitBtn"),
       sampleBtn: document.getElementById("sampleBtn"),
       clearBtn: document.getElementById("clearBtn"),
+      gitClearBtn: document.getElementById("gitClearBtn"),
       message: document.getElementById("message"),
       taskDot: document.getElementById("taskDot"),
       taskStatus: document.getElementById("taskStatus"),
@@ -832,6 +900,8 @@ index 1111111..2222222 100644
       markdownReport: document.getElementById("markdownReport"),
       jsonReport: document.getElementById("jsonReport"),
       langButtons: document.querySelectorAll(".lang-btn"),
+      inputTabs: document.querySelectorAll(".input-tab"),
+      inputPanels: document.querySelectorAll(".input-panel"),
     };
 
     function setMessage(text, type = "") {
@@ -901,33 +971,19 @@ index 1111111..2222222 100644
       }
     }
 
-    async function runReview() {
-      const diffText = els.diffText.value.trim();
-      if (!diffText) {
-        setMessage("Please paste or load a diff first.", "error");
-        return;
-      }
-      if (!looksLikeGitDiff(diffText)) {
-        setMessage("Please paste a unified Git diff, not plain text. It should include a diff --git header and @@ hunk header.", "error");
-        return;
-      }
-
+    async function submitReview(endpoint, body, submittingMessage) {
       stopPolling();
       resetResult();
       els.submitBtn.disabled = true;
+      els.gitSubmitBtn.disabled = true;
       setTaskStatus("submitting");
-      setMessage("Submitting review task...");
+      setMessage(submittingMessage);
 
       try {
-        const response = await fetch("/api/reviews", {
+        const response = await fetch(endpoint, {
           method: "POST",
           headers: apiHeaders(true),
-          body: JSON.stringify({
-            source_type: els.sourceType.value.trim() || "ui",
-            repo_name: els.repoName.value.trim() || "local-demo",
-            diff_text: diffText,
-            changed_files: [],
-          }),
+          body: JSON.stringify(body),
         });
 
         if (!response.ok) {
@@ -946,7 +1002,48 @@ index 1111111..2222222 100644
         setMessage(`Submit failed: ${error.message}`, "error");
       } finally {
         els.submitBtn.disabled = false;
+        els.gitSubmitBtn.disabled = false;
       }
+    }
+
+    async function runReview() {
+      const diffText = els.diffText.value.trim();
+      if (!diffText) {
+        setMessage("Please paste or load a diff first.", "error");
+        return;
+      }
+      if (!looksLikeGitDiff(diffText)) {
+        setMessage("Please paste a unified Git diff, not plain text. It should include a diff --git header and @@ hunk header.", "error");
+        return;
+      }
+
+      await submitReview("/api/reviews", {
+        source_type: els.sourceType.value.trim() || "ui",
+        repo_name: els.repoName.value.trim() || "local-demo",
+        diff_text: diffText,
+        changed_files: [],
+      }, "Submitting review task...");
+    }
+
+    async function runGitReview() {
+      const repoPath = els.gitRepoPath.value.trim();
+      const baseRef = els.gitBaseRef.value.trim() || "main";
+      const headRef = els.gitHeadRef.value.trim();
+      if (!repoPath) {
+        setMessage("Please enter a local repository path.", "error");
+        return;
+      }
+      if (!headRef) {
+        setMessage("Please enter the head ref to compare.", "error");
+        return;
+      }
+
+      await submitReview("/api/reviews/from-git", {
+        repo_path: repoPath,
+        base_ref: baseRef,
+        head_ref: headRef,
+        repo_name: els.repoName.value.trim() || undefined,
+      }, "Generating diff from local Git repository...");
     }
 
     async function pollTask() {
@@ -1374,6 +1471,15 @@ index 1111111..2222222 100644
       });
     });
 
+    els.inputTabs.forEach((button) => {
+      button.addEventListener("click", () => {
+        els.inputTabs.forEach((tab) => tab.classList.remove("active"));
+        els.inputPanels.forEach((panel) => panel.classList.remove("active"));
+        button.classList.add("active");
+        document.getElementById(button.dataset.inputTab).classList.add("active");
+      });
+    });
+
     function setResultLanguage(language) {
       state.resultLanguage = language;
       els.langButtons.forEach((button) => {
@@ -1401,6 +1507,7 @@ index 1111111..2222222 100644
     els.apiKey.addEventListener("change", saveApiKey);
 
     els.submitBtn.addEventListener("click", runReview);
+    els.gitSubmitBtn.addEventListener("click", runGitReview);
     els.sampleBtn.addEventListener("click", () => {
       els.diffText.value = sampleDiff;
       setMessage("Sample diff loaded.", "ok");
@@ -1408,6 +1515,16 @@ index 1111111..2222222 100644
     els.clearBtn.addEventListener("click", () => {
       stopPolling();
       els.diffText.value = "";
+      state.taskId = null;
+      setTaskStatus("idle");
+      resetResult();
+      setMessage("Ready.");
+    });
+    els.gitClearBtn.addEventListener("click", () => {
+      stopPolling();
+      els.gitRepoPath.value = "";
+      els.gitBaseRef.value = "main";
+      els.gitHeadRef.value = "";
       state.taskId = null;
       setTaskStatus("idle");
       resetResult();

@@ -122,6 +122,36 @@ class CreateReviewRequest(BaseModel):
         return self
 
 
+_UNSAFE_GIT_REF_RE = re.compile(r"[\s;&|`]")
+
+
+class CreateGitReviewRequest(BaseModel):
+    repo_path: str
+    base_ref: str = "main"
+    head_ref: str
+    repo_name: Optional[str] = None
+
+    @field_validator("repo_path")
+    @classmethod
+    def validate_repo_path(cls, value: str) -> str:
+        repo_path = value.strip()
+        if not repo_path:
+            raise ValueError("repo_path must not be empty")
+        if re.search(r"[\x00-\x1f\x7f]", repo_path):
+            raise ValueError("repo_path must not contain control characters")
+        return repo_path
+
+    @field_validator("base_ref", "head_ref")
+    @classmethod
+    def validate_git_ref(cls, value: str) -> str:
+        git_ref = value.strip()
+        if not git_ref:
+            raise ValueError("git ref must not be empty")
+        if _UNSAFE_GIT_REF_RE.search(git_ref):
+            raise ValueError("git ref must not contain whitespace or shell metacharacters")
+        return git_ref
+
+
 # ── Response schemas ────────────────────────────────────────────
 
 class CreateReviewResponse(BaseModel):

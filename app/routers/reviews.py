@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.models import (
+    CreateGitReviewRequest,
     CreateReviewRequest,
     CreateReviewResponse,
     ReviewTaskEventResponse,
@@ -15,6 +17,7 @@ from app.models import (
 from app.services.review_dispatcher import dispatch_review_task
 from app.services.review_service import create_review, get_review, list_review_events
 from app.services.auth import require_api_access
+from app.services.git_diff import GitDiffError, generate_diff_from_refs
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +44,44 @@ def _failed_report_json(error_message: str | None, json_report: dict | None) -> 
     }
 
 
-@router.post("", response_model=CreateReviewResponse, status_code=201)
-def create_review_endpoint(
-    req: CreateReviewRequest,
-) -> CreateReviewResponse:
-    task = create_review(req)
+def _dispatch_created_task(task) -> None:
     if task.status == "pending":
         logger.info("Created review task: %s, dispatching pipeline.", task.id)
         dispatch_review_task(task.id)
     else:
         logger.info("Created review task: %s with status=%s.", task.id, task.status)
+
+
+@router.post("", response_model=CreateReviewResponse, status_code=201)
+def create_review_endpoint(
+    req: CreateReviewRequest,
+) -> CreateReviewResponse:
+    task = create_review(req)
+    _dispatch_created_task(task)
+
+    return CreateReviewResponse(task_id=task.id, status=task.status)
+
+
+@router.post("/from-git", response_model=CreateReviewResponse, status_code=201)
+def create_review_from_git_endpoint(
+    req: CreateGitReviewRequest,
+) -> CreateReviewResponse:
+    try:
+        diff_text = generate_diff_from_refs(req.repo_path, req.base_ref, req.head_ref)
+        review_req = CreateReviewRequest(
+            source_type="local_git",
+            repo_name=req.repo_name or Path(req.repo_path).expanduser().name or "local-repo",
+            repo_path=req.repo_path,
+            base_ref=req.base_ref,
+            head_ref=req.head_ref,
+            diff_text=diff_text,
+            changed_files=[],
+        )
+    except (GitDiffError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    task = create_review(review_req)
+    _dispatch_created_task(task)
 
     return CreateReviewResponse(task_id=task.id, status=task.status)
 

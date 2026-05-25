@@ -4,8 +4,12 @@ import json
 from types import SimpleNamespace
 from datetime import datetime, timezone
 
-from app.models import CreateReviewRequest
+import pytest
+from fastapi import HTTPException
+
+from app.models import CreateGitReviewRequest, CreateReviewRequest
 from app.routers import reviews
+from app.services.git_diff import GitDiffError
 
 
 def test_failed_report_returns_partial_report(monkeypatch) -> None:
@@ -111,3 +115,74 @@ def test_create_review_endpoint_does_not_dispatch_failed_input(monkeypatch) -> N
 
     assert response.task_id == "task-5"
     assert response.status == "failed"
+
+
+def test_create_review_from_git_endpoint_dispatches_generated_diff(monkeypatch) -> None:
+    task = SimpleNamespace(id="task-6", status="pending")
+    created_request = {}
+    dispatched: dict[str, str] = {}
+    monkeypatch.setattr(
+        reviews,
+        "generate_diff_from_refs",
+        lambda repo_path, base_ref, head_ref: (
+            "diff --git a/app/demo.py b/app/demo.py\n"
+            "--- a/app/demo.py\n"
+            "+++ b/app/demo.py\n"
+            "@@ -1 +1 @@\n"
+            "+print('hello')\n"
+        ),
+    )
+
+    def fake_create_review(req):
+        created_request["req"] = req
+        return task
+
+    monkeypatch.setattr(reviews, "create_review", fake_create_review)
+    monkeypatch.setattr(
+        reviews,
+        "dispatch_review_task",
+        lambda task_id: dispatched.setdefault("task_id", task_id),
+    )
+
+    response = reviews.create_review_from_git_endpoint(
+        CreateGitReviewRequest(
+            repo_path="C:/repo/demo",
+            base_ref="main",
+            head_ref="feature",
+        ),
+    )
+
+    req = created_request["req"]
+    assert response.task_id == "task-6"
+    assert dispatched == {"task_id": "task-6"}
+    assert req.source_type == "local_git"
+    assert req.repo_name == "demo"
+    assert req.repo_path == "C:/repo/demo"
+    assert req.base_ref == "main"
+    assert req.head_ref == "feature"
+    assert "diff --git" in req.diff_text
+
+
+def test_create_review_from_git_endpoint_returns_400_on_diff_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        reviews,
+        "generate_diff_from_refs",
+        lambda repo_path, base_ref, head_ref: (_ for _ in ()).throw(GitDiffError("No reviewable diff")),
+    )
+
+    def fail_create_review(req):
+        raise AssertionError("invalid git input should not create a review")
+
+    monkeypatch.setattr(reviews, "create_review", fail_create_review)
+
+    with pytest.raises(HTTPException) as exc:
+        reviews.create_review_from_git_endpoint(
+            CreateGitReviewRequest(
+                repo_path="C:/repo/demo",
+                base_ref="main",
+                head_ref="feature",
+            ),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "No reviewable diff"

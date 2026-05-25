@@ -8,6 +8,62 @@ This project is a multi-agent code review system built with FastAPI, LangGraph, 
 
 Current phase: P1/P2 working skeleton with functional API, lightweight web console, database persistence, sequential agent orchestration, pattern-based static/security/style checks, mock/optional OpenAI-compatible LLM review, LLM safety gates/redaction, draft test generation, validation, reporting, and pytest coverage for the core flow.
 
+## Project Structure
+
+```text
+.
+|-- app/
+|   |-- main.py                 # FastAPI application factory, lifespan startup, router/static mounting
+|   |-- config.py               # Environment-driven Settings dataclass
+|   |-- database.py             # SQLAlchemy engine/session/Base and lightweight schema migration
+|   |-- worker.py               # Celery app and durable background review task entrypoint
+|   |-- agents/                 # LangGraph review pipeline nodes and diff utilities
+|   |   |-- orchestrator.py      # Builds and runs the review StateGraph
+|   |   |-- context_builder.py   # Parses review input, changed files, languages, and context
+|   |   |-- diff_utils.py        # Unified diff added-line and line-number helpers
+|   |   |-- static_analysis.py   # Pattern-based maintainability/static checks
+|   |   |-- style_check.py       # TODO/FIXME/HACK style checks
+|   |   |-- security_scan.py     # Pattern-based security checks
+|   |   |-- test_impact.py       # Test impact and recommended test type analysis
+|   |   |-- finding_aggregator.py # Finding deduplication and severity normalization
+|   |   |-- llm_review.py        # Mock or gated external LLM review node
+|   |   |-- test_generation.py   # Draft test plan and snippet generation
+|   |   |-- validation.py        # Generated test/report structure validation
+|   |   `-- report.py            # Markdown and JSON report generation
+|   |-- models/                 # SQLAlchemy ORM models, Pydantic schemas, and ReviewState types
+|   |   |-- review_task.py       # Main persisted review task table
+|   |   |-- review_task_event.py # Persisted task event/history model
+|   |   |-- schemas.py           # API request/response validation schemas
+|   |   |-- findings.py          # Finding validation and normalization helpers
+|   |   |-- report.py            # Report payload models
+|   |   `-- state.py             # TypedDict state shared by pipeline nodes
+|   |-- routers/                # HTTP API layer
+|   |   |-- reviews.py           # Review creation/status/report endpoints
+|   |   `-- knowledge.py         # Repository knowledge indexing endpoint
+|   |-- services/               # Business logic and integrations
+|   |   |-- review_service.py    # Review task CRUD, pipeline execution, and result persistence
+|   |   |-- review_dispatcher.py # Dispatch abstraction for sync/Celery review execution
+|   |   |-- auth.py              # API key authentication and request rate limiting
+|   |   |-- llm_client.py        # OpenAI-compatible chat completions client
+|   |   |-- llm_safety.py        # LLM mode gates and sensitive value redaction
+|   |   |-- knowledge_base.py    # Repository file indexing service
+|   |   |-- vector_store.py      # Chroma vector search wrapper and seed documents
+|   |   `-- pull_request_provider.py # Pull request metadata provider abstraction
+|   `-- static/
+|       `-- index.html           # Lightweight browser console for submitting and viewing reviews
+|-- tests/                      # Pytest coverage for agents, routers, services, schemas, auth, and storage
+|-- data/                       # Local runtime data such as SQLite and Chroma persistence
+|-- myenv/                      # Local Python virtual environment, not application source
+|-- requirements.txt            # Python runtime/test dependencies
+|-- Dockerfile                  # Container build entrypoint
+|-- .env.example                # Example local configuration
+|-- AGENT_SYSTEM_TECHNICAL_DESIGN.md
+|-- IMPROVEMENT_PLAN.md
+`-- PRODUCT_IMPROVEMENT_ROADMAP.md
+```
+
+Generated caches such as `__pycache__/`, `.pytest_cache/`, and `.mypy_cache/` are local artifacts and should not be treated as source structure.
+
 ## Development Commands
 
 ```powershell
@@ -109,17 +165,22 @@ Each node reads and updates `ReviewState`. If a node records an error, the final
 | `app/main.py` | FastAPI app with lifespan-managed database initialization |
 | `app/config.py` | `Settings` dataclass loaded from environment variables |
 | `app/database.py` | SQLAlchemy engine/session/Base and schema initialization |
+| `app/worker.py` | Celery app and background review task entrypoint |
 | `app/models/review_task.py` | `ReviewTask` ORM model |
+| `app/models/review_task_event.py` | `ReviewTaskEvent` ORM model for persisted task history/events |
 | `app/models/findings.py` | Pydantic finding validation and normalization helpers |
 | `app/models/report.py` | Pydantic report payload models |
 | `app/models/schemas.py` | Pydantic request/response schemas |
 | `app/models/state.py` | `ReviewState` and `Finding` TypedDicts |
 | `app/routers/reviews.py` | Review task API routes |
 | `app/routers/knowledge.py` | Knowledge indexing API route |
+| `app/services/auth.py` | API key authentication and fixed-window rate limiting helpers |
 | `app/services/knowledge_base.py` | Repository file indexing service |
 | `app/services/review_service.py` | Task CRUD, pipeline execution, result persistence |
+| `app/services/review_dispatcher.py` | Dispatch abstraction for running reviews synchronously or through Celery |
 | `app/services/llm_client.py` | OpenAI-compatible chat completions client |
 | `app/services/llm_safety.py` | LLM mode selection and sensitive value redaction |
+| `app/services/pull_request_provider.py` | Pull request metadata provider abstraction |
 | `app/services/vector_store.py` | Chroma vector search wrapper with seed documents |
 | `app/agents/orchestrator.py` | LangGraph `StateGraph` construction and execution |
 | `app/agents/context_builder.py` | Diff parsing, language detection, project context construction |
