@@ -44,6 +44,7 @@ class ReviewReportModel(BaseModel):
     high_count: int = Field(ge=0)
     medium_count: int = Field(ge=0)
     low_count: int = Field(ge=0)
+    info_count: int = Field(default=0, ge=0)
     merge_recommendation: MergeRecommendationModel
     high_risk_findings: list[dict[str, Any]] = Field(default_factory=list)
     findings: list[dict[str, Any]] = Field(default_factory=list)
@@ -51,6 +52,7 @@ class ReviewReportModel(BaseModel):
     generated_tests: list[dict[str, Any]] = Field(default_factory=list)
     validation_result: dict[str, Any] = Field(default_factory=dict)
     validation_warnings: list[dict[str, Any]] = Field(default_factory=list)
+    quality_warnings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ReportGenerationResultModel(BaseModel):

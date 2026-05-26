@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 
 from app.config import settings
 from app.agents.diff_utils import added_text_by_file, is_code_file
+from app.agents.evidence_extractor import extract_evidence
 from app.services.llm_client import call_llm
 from app.services.llm_safety import external_llm_enabled, llm_mode, redact_text
 
@@ -15,7 +17,10 @@ logger = logging.getLogger(__name__)
 LLM_REVIEW_SYSTEM_PROMPT = """You are the LLM Review Agent in a multi-agent code review system.
 Return only JSON with this shape: {"findings": [Finding]}.
 Each Finding must include agent_name, severity, category, file_path, line_number, title,
-description, evidence, suggestion, confidence. Only report issues supported by the diff."""
+description, evidence, suggestion, confidence. Only report actionable defects supported by
+specific changed code. Do not report generic reminders such as "needs review" or broad
+best-practice advice. If a finding lacks file_path, line_number, evidence, and a concrete
+fix suggestion, omit it."""
 
 
 def _reviewable_changes(diff_text: str, changed_files: list[dict]) -> list[dict]:
@@ -42,6 +47,7 @@ def _reviewable_changes(diff_text: str, changed_files: list[dict]) -> list[dict]
                     "file_path": file_path,
                     "line_number": line_number,
                     "text": line_text,
+                    "evidence": extract_evidence(diff_text, changed_files, file_path, line_number, line_number),
                 })
 
     for changed in changed_files:
@@ -55,6 +61,7 @@ def _reviewable_changes(diff_text: str, changed_files: list[dict]) -> list[dict]
                     "file_path": file_path,
                     "line_number": line_number,
                     "text": line_text,
+                    "evidence": extract_evidence("", changed_files, file_path, line_number, line_number),
                 })
 
     return changes
@@ -74,17 +81,17 @@ def _reviewable_text(changes: list[dict]) -> tuple[str, list[str]]:
 
 
 def _mock_llm_call(changes: list[dict]) -> list[dict]:
-    """Simulate LLM review findings based on input heuristics.
-    In production this will be replaced with a real LLM API call via app.config.llm_provider/model.
-    """
+    """Simulate LLM review findings for concrete, evidence-backed risks only."""
     findings: list[dict] = []
-    seen_categories: set[str] = set()
+    seen_signatures: set[tuple[str, str, int]] = set()
 
     def add_finding(change: dict, severity: str, category: str, title: str,
-                    description: str, suggestion: str, confidence: float) -> None:
-        if category in seen_categories:
+                    description: str, suggestion: str, confidence: float,
+                    attack_scenario: str = "") -> None:
+        signature = (title, change["file_path"], change["line_number"])
+        if signature in seen_signatures:
             return
-        seen_categories.add(category)
+        seen_signatures.add(signature)
         findings.append({
             "agent_name": "llm_review_agent",
             "severity": severity,
@@ -93,64 +100,52 @@ def _mock_llm_call(changes: list[dict]) -> list[dict]:
             "line_number": change["line_number"],
             "title": title,
             "description": description,
-            "evidence": change["text"].strip(),
+            "evidence": change.get("evidence") or change["text"],
             "suggestion": suggestion,
             "confidence": confidence,
+            "attack_scenario": attack_scenario,
         })
 
-    rules = [
-        (
-            "logic",
-            ["auth", "login", "logout", "permission", "role", "access control"],
-            "medium",
-            "Authentication-related change needs targeted review",
-            "This changed line touches authentication or authorization behavior.",
-            "Verify this specific path enforces the intended auth and role checks before business logic runs.",
-            0.58,
-        ),
-        (
-            "reliability",
-            ["except", "error", "raise", "try", "catch", "fallback"],
-            "low",
-            "Error handling path needs targeted review",
-            "This changed line affects exception or fallback behavior.",
-            "Confirm the error is handled at the right boundary and returns an actionable, non-leaky response.",
-            0.48,
-        ),
-        (
-            "data",
-            ["sql", "query", "database", "db", "session", "commit", "rollback", "transaction"],
-            "medium",
-            "Database interaction needs targeted review",
-            "This changed line touches database or transaction behavior.",
-            "Check transaction boundaries, rollback behavior, and whether user-controlled values are safely parameterized.",
-            0.52,
-        ),
-        (
-            "compatibility",
-            ["api", "endpoint", "router", "route", "request", "response", "status_code"],
-            "medium",
-            "API surface change needs targeted review",
-            "This changed line appears to affect the API contract.",
-            "Verify request and response compatibility, including status codes and schema changes.",
-            0.50,
-        ),
-        (
-            "validation",
-            ["input", "user", "body", "param", "json", "form", "query_param"],
-            "low",
-            "Input handling needs targeted validation review",
-            "This changed line handles user-controlled input.",
-            "Add or verify validators for empty, malformed, oversized, and unexpected inputs.",
-            0.48,
-        ),
-    ]
-
     for change in changes:
-        line = change["text"].lower()
-        for category, keywords, severity, title, description, suggestion, confidence in rules:
-            if category not in seen_categories and any(kw in line for kw in keywords):
-                add_finding(change, severity, category, title, description, suggestion, confidence)
+        line = change["text"]
+        lowered = line.lower()
+
+        if (
+            re.search(r"\bf[\"'][^\"']*\b(select|insert|update|delete|drop|alter|create)\b", line, re.IGNORECASE)
+            and "{" in line
+        ):
+            add_finding(
+                change,
+                "critical",
+                "security",
+                "Potential SQL injection via f-string",
+                "SQL query text is built with f-string interpolation.",
+                "Use parameterized queries or an ORM instead of interpolating values into SQL.",
+                0.86,
+                "User-controlled values can alter the SQL statement when interpolated into the query string.",
+            )
+        elif "shell=true" in lowered.replace(" ", "") or re.search(r"\bos\.system\s*\(", line):
+            add_finding(
+                change,
+                "critical",
+                "security",
+                "Potential command injection",
+                "Shell command execution is enabled in changed code.",
+                "Avoid shell=True/os.system; pass argument lists to subprocess and validate user input.",
+                0.84,
+                "User-controlled shell metacharacters can execute unintended commands.",
+            )
+        elif re.search(r"\b(eval|exec|compile)\s*\(", line):
+            add_finding(
+                change,
+                "critical",
+                "security",
+                "Use of dangerous eval/exec",
+                "Changed code executes dynamic Python code.",
+                "Remove eval/exec/compile or replace it with an explicit dispatch table.",
+                0.84,
+                "If user-controlled input reaches this call, an attacker can execute arbitrary code.",
+            )
 
     logger.info("Mock LLM review produced %d finding(s).", len(findings))
     return findings
@@ -163,13 +158,6 @@ def review(diff_text: str, changed_files: list[dict],
     review_text, file_paths = _reviewable_text(changes)
     if not review_text.strip():
         return []
-
-    # Build a prompt that summarizes what we're reviewing (used by mock heuristics)
-    combined_context = (
-        f"Files: {' '.join(file_paths)}. "
-        f"Languages: {project_context.get('languages', [])}. "
-        f"Changed code length: {len(review_text)} chars."
-    )
 
     user_prompt = json.dumps({
         "changed_code": review_text[: settings.review_max_diff_chars],

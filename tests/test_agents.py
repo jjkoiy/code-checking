@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.agents import (
     finding_aggregator,
+    evidence_extractor,
     llm_review,
     report,
     security_scan,
@@ -43,20 +44,11 @@ def test_static_security_and_style_findings_include_file_and_line(risky_python_d
         and finding["line_number"] == 2
         for finding in security_findings
     )
-    assert style_findings == [
-        {
-            "agent_name": "style_agent",
-            "severity": "low",
-            "category": "maintainability",
-            "file_path": "app/demo.py",
-            "line_number": 3,
-            "title": "TODO/FIXME left in code",
-            "description": "Unresolved TODO or FIXME comment may indicate incomplete work.",
-            "evidence": "# TODO tighten auth",
-            "suggestion": "Address the item or convert it to a tracked ticket.",
-            "confidence": 0.60,
-        }
-    ]
+    assert style_findings[0]["severity"] == "medium"
+    assert style_findings[0]["category"] == "security"
+    assert style_findings[0]["line_number"] == 3
+    assert style_findings[0]["title"] == "Auth/security TODO left in code"
+    assert style_findings[0]["evidence"] == "    # TODO tighten auth"
 
 
 def test_static_security_and_style_scan_changed_file_content_without_diff() -> None:
@@ -90,7 +82,7 @@ def test_static_security_and_style_scan_changed_file_content_without_diff() -> N
         for finding in security_findings
     )
     assert any(
-        finding["title"] == "TODO/FIXME left in code"
+        finding["title"] == "Auth/security TODO left in code"
         and finding["line_number"] == 2
         for finding in style_findings
     )
@@ -205,6 +197,8 @@ def test_test_generation_skips_call_llm_when_external_llm_is_disabled(monkeypatc
 
     assert result["generated_tests"]
     assert result["generated_tests"][0]["executed"] is False
+    assert "pytest.skip" not in result["generated_tests"][0]["code"]
+    assert "Assertion direction:" in result["generated_tests"][0]["code"]
 
 
 def test_test_generation_creates_draft_for_each_high_risk_finding(monkeypatch) -> None:
@@ -247,6 +241,69 @@ def test_test_generation_creates_draft_for_each_high_risk_finding(monkeypatch) -
     ]
     assert len(finding_drafts) == 2
     assert all(test["generation_status"] == "draft" for test in finding_drafts)
+    assert all("pytest.skip" not in test["code"] for test in finding_drafts)
+
+
+def test_test_generation_uses_finding_specific_strategies(monkeypatch) -> None:
+    monkeypatch.setattr(test_generation.settings, "llm_provider", "mock")
+    monkeypatch.setattr(test_generation.settings, "llm_api_key", "")
+
+    result = test_generation.generate(
+        changed_files=[{"file_path": "app/demo.py", "language": "python"}],
+        aggregated_findings=[
+            {
+                "id": "sql-1",
+                "agent_name": "security_agent",
+                "severity": "critical",
+                "category": "security",
+                "file_path": "app/demo.py",
+                "line_number": 3,
+                "title": "Potential SQL injection via f-string",
+                "description": "SQL query uses interpolation.",
+                "suggestion": "Use parameterized queries.",
+                "rule_family": "sql-injection",
+                "confidence": 0.9,
+            },
+            {
+                "id": "except-1",
+                "agent_name": "static_analysis_agent",
+                "severity": "medium",
+                "category": "bug",
+                "file_path": "app/demo.py",
+                "line_number": 8,
+                "title": "Overly broad exception catch with empty handling",
+                "description": "Exception is swallowed.",
+                "rule_family": "exception-handling",
+                "confidence": 0.8,
+            },
+            {
+                "id": "auth-1",
+                "agent_name": "style_agent",
+                "severity": "medium",
+                "category": "security",
+                "file_path": "app/demo.py",
+                "line_number": 10,
+                "title": "Auth/security TODO left in code",
+                "description": "TODO tighten auth.",
+                "rule_family": "auth-todo",
+                "confidence": 0.7,
+            },
+        ],
+        llm_findings=[],
+        test_impact={},
+    )
+
+    suggestions = "\n".join(
+        item["risk_covered"] + "\n" + item["assertion_direction"]
+        for item in result["test_plan"]
+    )
+    drafts = "\n".join(item["code"] for item in result["generated_tests"])
+    assert "SQL injection payload" in suggestions or "payload" in suggestions
+    assert "bound parameters" in suggestions
+    assert "not silently swallowed" in suggestions
+    assert "unauthenticated" in suggestions
+    assert "insufficient-permission" in suggestions
+    assert "pytest.skip" not in drafts
 
 
 def test_llm_review_redacts_sensitive_values_before_external_call(monkeypatch) -> None:
@@ -291,6 +348,29 @@ def test_plain_text_input_does_not_trigger_mock_llm_findings(monkeypatch) -> Non
         changed_files=[],
         aggregated_findings=[],
         project_context={"languages": [], "risk_hints": ["api", "input", "login"]},
+    )
+
+    assert findings == []
+
+
+def test_mock_llm_does_not_emit_generic_keyword_review_findings(monkeypatch) -> None:
+    monkeypatch.setattr(llm_review.settings, "llm_provider", "mock")
+    monkeypatch.setattr(llm_review.settings, "llm_api_key", "")
+    diff_text = """diff --git a/app/routes.py b/app/routes.py
+index 1111111..2222222 100644
+--- a/app/routes.py
++++ b/app/routes.py
+@@ -1 +1,4 @@
++def get_user_response(user_id):
++    response = {"user_id": user_id, "status_code": 200}
++    return response
+"""
+
+    findings = llm_review.review(
+        diff_text=diff_text,
+        changed_files=[{"file_path": "app/routes.py", "language": "python"}],
+        aggregated_findings=[],
+        project_context={"languages": ["python"]},
     )
 
     assert findings == []
@@ -345,7 +425,7 @@ def handler(user):
 
     assert any(finding["title"] == "SQL string concatenation / interpolation" for finding in static_findings)
     assert any(finding["title"] == "Potential SQL injection via f-string" for finding in security_findings)
-    assert any(finding["title"] == "TODO/FIXME left in code" for finding in style_findings)
+    assert any(finding["title"] == "Auth/security TODO left in code" for finding in style_findings)
     assert llm_findings
 
 
@@ -429,6 +509,43 @@ def load_config(raw):
     assert not any(finding["title"] == "Insecure deserialization" for finding in findings)
 
 
+def test_security_scan_does_not_treat_non_sql_query_f_string_as_sql_injection() -> None:
+    raw_code = """# app/client.py
+
+def search_url(term):
+    query = f"https://example.com/search?q={term}"
+    return query
+"""
+
+    findings = security_scan.scan(
+        raw_code,
+        [{"file_path": "app/client.py", "language": "python"}],
+    )
+
+    assert not any(
+        finding["title"] in {
+            "Potential SQL injection via f-string",
+            "Variable named query/sql assigned to f-string",
+        }
+        for finding in findings
+    )
+
+
+def test_security_scan_skips_placeholder_secrets() -> None:
+    raw_code = """# app/settings.py
+
+API_KEY = "test-token"
+SECRET = "change-me"
+"""
+
+    findings = security_scan.scan(
+        raw_code,
+        [{"file_path": "app/settings.py", "language": "python"}],
+    )
+
+    assert not any(finding["title"] == "Hardcoded secret or credential" for finding in findings)
+
+
 def test_report_uses_plain_ok_text_for_empty_review() -> None:
     result = report.generate([], [], {}, {})
 
@@ -483,7 +600,7 @@ def test_report_distinguishes_no_reviewable_content() -> None:
     assert result["json_report"]["merge_recommendation"]["label"] == "No reviewable content"
 
 
-def test_report_severity_counts_exclude_blocking_findings() -> None:
+def test_report_severity_counts_include_blocking_findings() -> None:
     result = report.generate(
         aggregated_findings=[
             {
@@ -506,9 +623,9 @@ def test_report_severity_counts_exclude_blocking_findings() -> None:
         validation_result={},
     )
 
-    assert "1 blocking; non-blocking severity: 0 critical, 1 high" in result["summary"]
+    assert "共发现 2 个问题：2 个高危。其中 1 个为阻塞问题。" in result["summary"]
     assert result["json_report"]["blocking_count"] == 1
-    assert result["json_report"]["high_count"] == 1
+    assert result["json_report"]["high_count"] == 2
     assert result["json_report"]["merge_recommendation"]["status"] == "block"
     assert "## Merge Recommendation" in result["markdown_report"]
     assert "## High-Risk Summary" in result["markdown_report"]
@@ -589,6 +706,133 @@ def test_finding_aggregator_normalizes_and_drops_invalid_findings() -> None:
     assert result[0]["confidence"] == 0.9
     assert result[0]["blocking"] is True
     assert len(warnings) == 2
+
+
+def test_finding_aggregator_drops_non_actionable_llm_findings() -> None:
+    warnings: list[dict] = []
+
+    result = finding_aggregator.aggregate(
+        [
+            {
+                "agent_name": "llm_review_agent",
+                "severity": "medium",
+                "category": "compatibility",
+                "title": "API surface change needs targeted review",
+                "description": "This changed line appears to affect the API contract.",
+                "confidence": 0.5,
+            }
+        ],
+        validation_warnings=warnings,
+    )
+
+    assert result == []
+    assert warnings
+    assert "non-actionable" in warnings[0]["error"]
+
+
+def test_finding_aggregator_merges_same_line_cross_agent_duplicates() -> None:
+    result = finding_aggregator.aggregate(
+        [
+            {
+                "agent_name": "static_analysis_agent",
+                "severity": "high",
+                "category": "bug",
+                "file_path": "app/demo.py",
+                "line_number": 2,
+                "title": "SQL string concatenation / interpolation",
+                "description": "SQL query built with f-string interpolation is prone to SQL injection and syntax errors.",
+                "evidence": "query = f\"SELECT * FROM users WHERE name = '{user}'\"",
+                "suggestion": "Use parameterized queries.",
+                "confidence": 0.75,
+            },
+            {
+                "agent_name": "security_agent",
+                "severity": "critical",
+                "category": "security",
+                "file_path": "app/demo.py",
+                "line_number": 2,
+                "title": "Potential SQL injection via f-string",
+                "description": "SQL query built with f-string interpolation allows SQL injection attacks.",
+                "evidence": "query = f\"SELECT * FROM users WHERE name = '{user}'\"",
+                "suggestion": "Use parameterized queries: SQLAlchemy text() with bindparams, psycopg2 %s placeholders, or an ORM.",
+                "confidence": 0.80,
+            },
+        ],
+    )
+
+    assert len(result) == 1
+    assert result[0]["title"] == "Potential SQL injection via f-string"
+    assert result[0]["category"] == "security"
+    assert result[0]["severity"] == "critical"
+    assert result[0]["blocking"] is True
+    assert result[0]["source_agents"] == ["static_analysis_agent", "security_agent"]
+
+
+def test_finding_aggregator_keeps_same_title_on_different_lines() -> None:
+    result = finding_aggregator.aggregate(
+        [
+            {
+                "agent_name": "style_agent",
+                "severity": "low",
+                "category": "maintainability",
+                "file_path": "app/demo.py",
+                "line_number": 2,
+                "title": "TODO/FIXME left in code",
+                "description": "Unresolved TODO or FIXME comment may indicate incomplete work.",
+                "evidence": "# TODO first",
+                "suggestion": "Address the item or convert it to a tracked ticket.",
+                "confidence": 0.60,
+            },
+            {
+                "agent_name": "style_agent",
+                "severity": "low",
+                "category": "maintainability",
+                "file_path": "app/demo.py",
+                "line_number": 8,
+                "title": "TODO/FIXME left in code",
+                "description": "Unresolved TODO or FIXME comment may indicate incomplete work.",
+                "evidence": "# TODO second",
+                "suggestion": "Address the item or convert it to a tracked ticket.",
+                "confidence": 0.60,
+            },
+        ],
+    )
+
+    assert len(result) == 2
+
+
+def test_evidence_extractor_preserves_diff_line_and_context() -> None:
+    diff_text = """diff --git a/app/demo.py b/app/demo.py
+index 1111111..2222222 100644
+--- a/app/demo.py
++++ b/app/demo.py
+@@ -1,3 +1,4 @@
+ def handler():
++    print("debug")
+     return "ok"
+"""
+
+    evidence = evidence_extractor.extract_evidence(
+        diff_text,
+        [{"file_path": "app/demo.py", "language": "python"}],
+        "app/demo.py",
+        2,
+        context_lines=1,
+    )
+
+    assert evidence == 'def handler():\n    print("debug")\n    return "ok"'
+
+
+def test_evidence_extractor_preserves_raw_content_block() -> None:
+    changed_files = [{
+        "file_path": "app/demo.py",
+        "language": "python",
+        "content": "def handler():\n    try:\n        risky()\n    except Exception:\n        pass\n",
+    }]
+
+    evidence = evidence_extractor.extract_evidence("", changed_files, "app/demo.py", 2, 5)
+
+    assert evidence == "    try:\n        risky()\n    except Exception:\n        pass"
 
 
 def test_report_consumes_only_final_normalized_findings() -> None:

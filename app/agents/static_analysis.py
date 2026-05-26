@@ -7,6 +7,7 @@ import logging
 import ast
 
 from app.agents.diff_utils import detect_language, is_code_file, review_text_by_file
+from app.agents.evidence_extractor import extract_evidence, line_span_for_match
 
 logger = logging.getLogger(__name__)
 
@@ -91,24 +92,11 @@ _CHECKS: list[dict] = [
 _AST_CHECK_IDS = {"SA001", "SA002", "SA003", "SA004", "SA006", "SA008"}
 
 
-def _line_number(text: str, match_start: int) -> int:
-    """Derive 1-based line number from character offset."""
-    return text[:match_start].count("\n") + 1
-
-
 def _mapped_line(line_numbers: list[int], lineno: int | None) -> int | None:
     if lineno is None:
         return None
     index = lineno - 1
     return line_numbers[index] if 0 <= index < len(line_numbers) else lineno
-
-
-def _source_line(text: str, lineno: int | None) -> str:
-    if lineno is None:
-        return ""
-    lines = text.splitlines()
-    index = lineno - 1
-    return lines[index].strip()[:200] if 0 <= index < len(lines) else ""
 
 
 def _ast_finding(
@@ -117,16 +105,30 @@ def _ast_finding(
     text: str,
     line_numbers: list[int],
     lineno: int | None,
+    end_lineno: int | None,
+    diff_text: str,
+    changed_files: list[dict],
 ) -> dict:
+    line_start = _mapped_line(line_numbers, lineno)
+    line_end = _mapped_line(line_numbers, end_lineno)
+    evidence = extract_evidence(
+        diff_text,
+        changed_files,
+        file_path,
+        line_start,
+        line_end,
+    )
     return {
         "agent_name": "static_analysis_agent",
         "severity": check["severity"],
         "category": check["category"],
         "file_path": file_path,
-        "line_number": _mapped_line(line_numbers, lineno),
+        "line_number": line_start,
+        "line_start": line_start,
+        "line_end": line_end,
         "title": check["title"],
         "description": check["description"],
-        "evidence": _source_line(text, lineno),
+        "evidence": evidence,
         "suggestion": check["suggestion"],
         "confidence": 0.82,
     }
@@ -140,7 +142,13 @@ def _is_ellipsis_expr(node: ast.AST) -> bool:
     return isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and node.value.value is Ellipsis
 
 
-def _python_ast_findings(file_path: str, text: str, line_numbers: list[int]) -> list[dict] | None:
+def _python_ast_findings(
+    file_path: str,
+    text: str,
+    line_numbers: list[int],
+    diff_text: str,
+    changed_files: list[dict],
+) -> list[dict] | None:
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -152,24 +160,24 @@ def _python_ast_findings(file_path: str, text: str, line_numbers: list[int]) -> 
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler):
             if node.type is None:
-                findings.append(_ast_finding(checks["SA001"], file_path, text, line_numbers, node.lineno))
+                findings.append(_ast_finding(checks["SA001"], file_path, text, line_numbers, node.lineno, node.end_lineno, diff_text, changed_files))
             elif _is_exception_name(node.type, "Exception"):
-                findings.append(_ast_finding(checks["SA006"], file_path, text, line_numbers, node.lineno))
+                findings.append(_ast_finding(checks["SA006"], file_path, text, line_numbers, node.lineno, node.end_lineno, diff_text, changed_files))
             if node.body and all(isinstance(item, ast.Pass) or _is_ellipsis_expr(item) for item in node.body):
-                findings.append(_ast_finding(checks["SA002"], file_path, text, line_numbers, node.lineno))
+                findings.append(_ast_finding(checks["SA002"], file_path, text, line_numbers, node.lineno, node.end_lineno, diff_text, changed_files))
 
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             defaults = list(node.args.defaults) + [item for item in node.args.kw_defaults if item is not None]
             if any(isinstance(default, (ast.List, ast.Dict, ast.Set)) for default in defaults):
-                findings.append(_ast_finding(checks["SA003"], file_path, text, line_numbers, node.lineno))
+                findings.append(_ast_finding(checks["SA003"], file_path, text, line_numbers, node.lineno, node.end_lineno, diff_text, changed_files))
 
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id == "print":
-                findings.append(_ast_finding(checks["SA004"], file_path, text, line_numbers, node.lineno))
+                findings.append(_ast_finding(checks["SA004"], file_path, text, line_numbers, node.lineno, node.end_lineno, diff_text, changed_files))
 
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
             if isinstance(node.value.func, ast.Name) and node.value.func.id == "open":
-                findings.append(_ast_finding(checks["SA008"], file_path, text, line_numbers, node.lineno))
+                findings.append(_ast_finding(checks["SA008"], file_path, text, line_numbers, node.lineno, node.end_lineno, diff_text, changed_files))
 
     return findings
 
@@ -201,7 +209,7 @@ def analyze(diff_text: str, changed_files: list[dict]) -> list[dict]:
         language = languages_by_file.get(file_path) or detect_language(file_path)
         if language != "python" or not is_code_file(file_path, language):
             continue
-        ast_findings = _python_ast_findings(file_path, added_text, line_numbers)
+        ast_findings = _python_ast_findings(file_path, added_text, line_numbers, diff_text, changed_files)
         if ast_findings is None:
             continue
         ast_parsed_files.add(file_path)
@@ -219,16 +227,17 @@ def analyze(diff_text: str, changed_files: list[dict]) -> list[dict]:
             if file_path in ast_parsed_files and check.get("id") in _AST_CHECK_IDS:
                 continue
             for m in check["pattern"].finditer(added_text):
-                added_index = _line_number(added_text, m.start()) - 1
-                linenum = line_numbers[added_index] if added_index < len(line_numbers) else None
-                evidence = added_text[max(0, m.start() - 20):m.end() + 40].strip().replace("\n", " ")[:200]
+                line_start, line_end = line_span_for_match(line_numbers, added_text, m.start(), m.end())
+                evidence = extract_evidence(diff_text, changed_files, file_path, line_start, line_end)
 
                 findings.append({
                     "agent_name": "static_analysis_agent",
                     "severity": check["severity"],
                     "category": check["category"],
                     "file_path": file_path,
-                    "line_number": linenum,
+                    "line_number": line_start,
+                    "line_start": line_start,
+                    "line_end": line_end,
                     "title": check["title"],
                     "description": check["description"],
                     "evidence": evidence,

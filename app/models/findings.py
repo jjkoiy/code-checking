@@ -8,16 +8,20 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 class FindingModel(BaseModel):
     id: str | None = None
     agent_name: str
-    severity: Literal["low", "medium", "high", "critical"]
+    severity: Literal["info", "low", "medium", "high", "critical"]
     category: str
     file_path: str | None = None
     line_number: int | None = Field(default=None, ge=1)
+    line_start: int | None = Field(default=None, ge=1)
+    line_end: int | None = Field(default=None, ge=1)
     title: str
     description: str
     evidence: str = ""
     suggestion: str = ""
     confidence: float = Field(ge=0.0, le=1.0)
     blocking: bool = False
+    rule_family: str | None = None
+    certainty: Literal["confirmed", "potential", "needs_context"] | None = None
     attack_scenario: str | None = None
     source_agents: list[str] = Field(default_factory=list)
 

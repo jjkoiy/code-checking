@@ -10,12 +10,16 @@ class Finding(TypedDict, total=False):
     category: str
     file_path: Optional[str]
     line_number: Optional[int]
+    line_start: Optional[int]
+    line_end: Optional[int]
     title: str
     description: str
     evidence: str
     suggestion: str
     confidence: float
     blocking: Optional[bool]
+    rule_family: Optional[str]
+    certainty: Optional[str]
     attack_scenario: Optional[str]
     source_agents: List[str]
 

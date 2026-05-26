@@ -6,6 +6,7 @@ import re
 import logging
 
 from app.agents.diff_utils import detect_language, is_code_file, review_text_by_file
+from app.agents.evidence_extractor import extract_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +21,38 @@ _CHECKS: list[dict] = [
     },
 ]
 
+_SECURITY_TODO_KEYWORDS = (
+    "auth",
+    "authentication",
+    "authorization",
+    "permission",
+    "role",
+    "admin",
+    "token",
+    "security",
+    "credential",
+)
 
-def _line_number(text: str, match_start: int) -> int:
-    return text[:match_start].count("\n") + 1
+
+def _todo_metadata(line_text: str) -> dict:
+    lowered = line_text.lower()
+    if any(keyword in lowered for keyword in _SECURITY_TODO_KEYWORDS):
+        return {
+            "severity": "medium",
+            "category": "security",
+            "title": "Auth/security TODO left in code",
+            "description": "A TODO touches auth or security behavior and should be treated as a caution until resolved.",
+            "suggestion": "Resolve the auth/security TODO or link it to a tracked issue with explicit tests for unauthenticated and unauthorized access.",
+            "confidence": 0.72,
+        }
+    return {
+        "severity": "low",
+        "category": "maintainability",
+        "title": "TODO/FIXME left in code",
+        "description": "Unresolved TODO or FIXME comment may indicate incomplete work.",
+        "suggestion": "Address the item or convert it to a tracked ticket.",
+        "confidence": 0.60,
+    }
 
 
 def check(changed_files: list[dict], diff_text: str = "") -> list[dict]:
@@ -41,17 +71,21 @@ def check(changed_files: list[dict], diff_text: str = "") -> list[dict]:
         for index, line_text in enumerate(added_text.splitlines()):
             linenum = line_numbers[index] if index < len(line_numbers) else None
             for m in re.finditer(r"\b(?:TODO|FIXME|HACK)\b", line_text):
+                metadata = _todo_metadata(line_text)
+                evidence = extract_evidence(diff_text, changed_files, file_path, linenum, linenum)
                 findings.append({
                     "agent_name": "style_agent",
-                    "severity": "low",
-                    "category": "maintainability",
+                    "severity": metadata["severity"],
+                    "category": metadata["category"],
                     "file_path": file_path,
                     "line_number": linenum,
-                    "title": "TODO/FIXME left in code",
-                    "description": "Unresolved TODO or FIXME comment may indicate incomplete work.",
-                    "evidence": line_text[max(0, m.start() - 10):m.end() + 30].strip(),
-                    "suggestion": "Address the item or convert it to a tracked ticket.",
-                    "confidence": 0.60,
+                    "line_start": linenum,
+                    "line_end": linenum,
+                    "title": metadata["title"],
+                    "description": metadata["description"],
+                    "evidence": evidence,
+                    "suggestion": metadata["suggestion"],
+                    "confidence": metadata["confidence"],
                 })
 
     logger.info("Style check produced %d finding(s).", len(findings))

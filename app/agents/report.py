@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from app.agents.report_quality_checker import check_report_quality
 from app.models.report import ReportGenerationResultModel, ReviewReportModel
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,21 @@ _SEVERITY_ICON = {
     "high": "[HIGH]",
     "medium": "[MEDIUM]",
     "low": "[LOW]",
+    "info": "[INFO]",
+}
+
+_SEVERITY_CN = {
+    "critical": "严重",
+    "high": "高危",
+    "medium": "中危",
+    "low": "低危",
+    "info": "提示",
+}
+
+_CERTAINTY_LABEL = {
+    "confirmed": "Confirmed issue",
+    "potential": "Potential issue",
+    "needs_context": "Needs human confirmation",
 }
 
 
@@ -26,13 +42,18 @@ def _format_finding_md(f: dict) -> str:
         f"- **File**: `{f.get('file_path') or 'N/A'}`",
         f"- **Line**: {f.get('line_number') or 'N/A'}",
         f"- **Confidence**: {f.get('confidence', 0):.0%}",
+        f"- **Assessment**: {_CERTAINTY_LABEL.get(f.get('certainty'), 'Potential issue')}",
         f"- **Source**: {', '.join(f.get('source_agents', ['unknown']))}",
         f"",
         f"**Description**: {f.get('description', 'N/A')}",
         f"",
     ]
     if f.get("evidence"):
-        lines.append(f"**Evidence**: `{f['evidence']}`")
+        lines.append("**Evidence**:")
+        lines.append("")
+        lines.append("```")
+        lines.append(str(f["evidence"]).rstrip())
+        lines.append("```")
         lines.append("")
     if f.get("suggestion"):
         lines.append(f"**Suggestion**: {f['suggestion']}")
@@ -45,6 +66,20 @@ def _format_finding_md(f: dict) -> str:
 
 def _format_languages(languages: list[str]) -> str:
     return ", ".join(sorted(language for language in languages if language)) or "unknown"
+
+
+def _format_location(finding: dict) -> str:
+    return f"{finding.get('file_path') or 'N/A'}:{finding.get('line_number') or 'N/A'}"
+
+
+def _summary_text(total: int, counts: dict[str, int], blocking_count: int) -> str:
+    parts = [
+        f"{count} 个{_SEVERITY_CN[severity]}"
+        for severity, count in counts.items()
+        if count
+    ]
+    severity_text = "，".join(parts) if parts else "0 个问题"
+    return f"共发现 {total} 个问题：{severity_text}。其中 {blocking_count} 个为阻塞问题。"
 
 
 def _build_merge_recommendation(
@@ -116,27 +151,34 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
     # Categorize
     blocking = [f for f in all_findings if f.get("blocking")]
     non_blocking = [f for f in all_findings if not f.get("blocking")]
+    severity_counts = {
+        "critical": sum(1 for f in all_findings if f.get("severity") == "critical"),
+        "high": sum(1 for f in all_findings if f.get("severity") == "high"),
+        "medium": sum(1 for f in all_findings if f.get("severity") == "medium"),
+        "low": sum(1 for f in all_findings if f.get("severity") == "low"),
+        "info": sum(1 for f in all_findings if f.get("severity") == "info"),
+    }
     critical = [f for f in non_blocking if f.get("severity") == "critical"]
     high = [f for f in non_blocking if f.get("severity") == "high"]
     medium = [f for f in non_blocking if f.get("severity") == "medium"]
     low = [f for f in non_blocking if f.get("severity") == "low"]
-    high_risk_findings = blocking + critical + high
+    info = [f for f in non_blocking if f.get("severity") == "info"]
+    high_risk_findings = [
+        f for f in all_findings
+        if f.get("blocking") or f.get("severity") in {"critical", "high"}
+    ]
 
     total = len(all_findings)
     has_reviewable_content = review_scope.get("has_reviewable_content", True)
     merge_recommendation = _build_merge_recommendation(
         blocking_count=len(blocking),
-        critical_count=len(critical),
-        high_count=len(high),
-        medium_count=len(medium),
+        critical_count=severity_counts["critical"],
+        high_count=severity_counts["high"],
+        medium_count=severity_counts["medium"],
         has_reviewable_content=has_reviewable_content,
     )
     if has_reviewable_content:
-        summary = (
-            f"Review complete. {total} finding(s): "
-            f"{len(blocking)} blocking; non-blocking severity: {len(critical)} critical, "
-            f"{len(high)} high, {len(medium)} medium, {len(low)} low."
-        )
+        summary = _summary_text(total, severity_counts, len(blocking))
     else:
         summary = (
             "Review completed without reviewable content. "
@@ -153,7 +195,7 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         "",
         "## Merge Recommendation",
         "",
-        f"**{merge_recommendation['label']}** — {merge_recommendation['reason']}",
+        f"**{merge_recommendation['label']}** - {merge_recommendation['reason']}",
         "",
         f"- **LLM mode**: `{llm_mode}`",
         "",
@@ -172,10 +214,9 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         md.append("## High-Risk Summary")
         md.append("")
         for f in high_risk_findings[:5]:
-            location = f"{f.get('file_path') or 'N/A'}:{f.get('line_number') or 'N/A'}"
             md.append(
                 f"- **{f.get('severity', 'low').upper()}** "
-                f"{f.get('title', 'No title')} (`{location}`)"
+                f"{f.get('title', 'No title')} (`{_format_location(f)}`)"
             )
         if len(high_risk_findings) > 5:
             md.append(f"- ...and {len(high_risk_findings) - 5} more high-risk finding(s).")
@@ -219,6 +260,14 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         md.append("## Low Severity")
         md.append("")
         for f in low:
+            md.append(_format_finding_md(f))
+        md.append("---")
+        md.append("")
+
+    if info:
+        md.append("## Informational")
+        md.append("")
+        for f in info:
             md.append(_format_finding_md(f))
         md.append("---")
         md.append("")
@@ -278,22 +327,18 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
             )
         md.append("")
 
-    md.append("*Generated by Agent Review System v0.1*")
-    md.append("")
-
-    markdown_report = "\n".join(md)
-
-    json_report = ReviewReportModel.model_validate({
+    json_payload = {
         "summary": summary,
         "metadata": metadata,
         "review_scope": review_scope,
         "llm_mode": llm_mode,
         "total_findings": total,
         "blocking_count": len(blocking),
-        "critical_count": len(critical),
-        "high_count": len(high),
-        "medium_count": len(medium),
-        "low_count": len(low),
+        "critical_count": severity_counts["critical"],
+        "high_count": severity_counts["high"],
+        "medium_count": severity_counts["medium"],
+        "low_count": severity_counts["low"],
+        "info_count": severity_counts["info"],
         "merge_recommendation": merge_recommendation,
         "high_risk_findings": high_risk_findings,
         "findings": all_findings,
@@ -301,7 +346,27 @@ def generate(aggregated_findings: list[dict], llm_findings: list[dict],
         "generated_tests": generated_tests,
         "validation_result": validation_result,
         "validation_warnings": validation_warnings,
-    }).model_dump()
+    }
+
+    markdown_preview = "\n".join(md + ["*Generated by Agent Review System v0.1*", ""])
+    quality_warnings = check_report_quality({
+        **json_payload,
+        "markdown_report": markdown_preview,
+    })
+    json_payload["quality_warnings"] = quality_warnings
+
+    if quality_warnings:
+        md.append("## Report Quality Warnings")
+        md.append("")
+        for warning in quality_warnings:
+            md.append(f"- **{warning.get('code', 'quality_warning')}**: {warning.get('message', '')}")
+        md.append("")
+
+    md.append("*Generated by Agent Review System v0.1*")
+    md.append("")
+
+    markdown_report = "\n".join(md)
+    json_report = ReviewReportModel.model_validate(json_payload).model_dump()
 
     logger.info("Report generated: %d findings.", total)
     return ReportGenerationResultModel.model_validate({

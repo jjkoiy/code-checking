@@ -6,6 +6,7 @@ import re
 import logging
 
 from app.agents.diff_utils import detect_language, is_code_file, review_text_by_file
+from app.agents.evidence_extractor import extract_evidence, line_span_for_match
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ _CHECKS: list[dict] = [
         "title": "Variable named query/sql assigned to f-string",
         "severity": "high",
         "pattern": re.compile(
-            r"(?:query|sql|cursor)\s*=\s*f[\"']",
+            r"(?:query|sql|cursor)\s*=\s*f[\"'][^\"']*\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE)\b",
             re.IGNORECASE,
         ),
         "description": "A variable named query/sql/cursor assigned to an f-string suggests dynamic SQL construction.",
@@ -106,10 +107,6 @@ _CHECKS: list[dict] = [
 ]
 
 
-def _line_number(text: str, match_start: int) -> int:
-    return text[:match_start].count("\n") + 1
-
-
 def _find_diff_lines(diff_text: str) -> set[int]:
     changed: set[int] = set()
     for m in re.finditer(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", diff_text, re.MULTILINE):
@@ -118,6 +115,38 @@ def _find_diff_lines(diff_text: str) -> set[int]:
         for ln in range(start, start + count):
             changed.add(ln)
     return changed
+
+
+def _is_low_risk_http_literal(evidence: str) -> bool:
+    lowered = evidence.lower()
+    return any(host in lowered for host in ("http://localhost", "http://127.0.0.1", "http://0.0.0.0"))
+
+
+def _looks_like_placeholder_secret(evidence: str) -> bool:
+    lowered = evidence.lower()
+    placeholders = (
+        "example",
+        "changeme",
+        "change-me",
+        "dummy",
+        "fake",
+        "placeholder",
+        "test-token",
+        "test_secret",
+        "your-token",
+        "your_token",
+    )
+    return any(token in lowered for token in placeholders)
+
+
+def _finding_confidence(check_id: str, evidence: str) -> float:
+    if check_id == "SEC002" and _looks_like_placeholder_secret(evidence):
+        return 0.45
+    if check_id == "SEC007" and _is_low_risk_http_literal(evidence):
+        return 0.45
+    if check_id in {"SEC001", "SEC003", "SEC004"}:
+        return 0.86
+    return 0.80
 
 
 def scan(diff_text: str, changed_files: list[dict]) -> list[dict]:
@@ -138,22 +167,26 @@ def scan(diff_text: str, changed_files: list[dict]) -> list[dict]:
             if not is_code_file(file_path, language):
                 continue
             for m in check["pattern"].finditer(added_text):
-                added_index = _line_number(added_text, m.start()) - 1
-                linenum = line_numbers[added_index] if added_index < len(line_numbers) else None
-                evidence = added_text[max(0, m.start() - 20):m.end() + 40].strip().replace("\n", " ")[:200]
+                line_start, line_end = line_span_for_match(line_numbers, added_text, m.start(), m.end())
+                evidence = extract_evidence(diff_text, changed_files, file_path, line_start, line_end)
+                confidence = _finding_confidence(check["id"], evidence)
+                if confidence < 0.5:
+                    continue
 
                 findings.append({
                     "agent_name": "security_agent",
                     "severity": check["severity"],
                     "category": "security",
                     "file_path": file_path,
-                    "line_number": linenum,
+                    "line_number": line_start,
+                    "line_start": line_start,
+                    "line_end": line_end,
                     "title": check["title"],
                     "description": check["description"],
                     "evidence": evidence,
                     "attack_scenario": check.get("attack_scenario", ""),
                     "suggestion": check["suggestion"],
-                    "confidence": 0.80,
+                    "confidence": confidence,
                 })
 
     logger.info("Security scan produced %d finding(s).", len(findings))
