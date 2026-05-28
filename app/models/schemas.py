@@ -200,5 +200,52 @@ class KnowledgeIndexResponse(BaseModel):
     indexed_files: int
     indexed_chunks: int
     skipped_files: int
+    deleted_chunks: int = 0
+    embedding_skipped: bool = False
+    skip_reason: Optional[str] = None
+
+
+class RiskRuleCard(BaseModel):
+    risk_id: str
+    title: str
+    severity: str = "medium"
+    category: str = "security"
+    bad_examples: List[str] = Field(default_factory=list)
+    safe_examples: List[str] = Field(default_factory=list)
+    source_patterns: List[str] = Field(default_factory=list)
+    sink_patterns: List[str] = Field(default_factory=list)
+    sanitizer_patterns: List[str] = Field(default_factory=list)
+    evidence_requirements: str = ""
+    suggestion: str
+    attack_scenario: str = ""
+    cwe: Optional[str] = None
+    languages: List[str] = Field(default_factory=list)
+    frameworks: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+
+    @field_validator("risk_id", "title", "severity", "category", "suggestion")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("must not be empty")
+        return text
+
+    @field_validator("severity")
+    @classmethod
+    def validate_severity(cls, value: str) -> str:
+        severity = value.strip().lower()
+        if severity not in {"info", "low", "medium", "high", "critical"}:
+            raise ValueError("severity must be one of info, low, medium, high, critical")
+        return severity
+
+
+class RiskRuleImportRequest(BaseModel):
+    rules: List[RiskRuleCard] = Field(min_length=1)
+
+
+class RiskRuleImportResponse(BaseModel):
+    status: str
+    indexed_rules: int
     embedding_skipped: bool = False
     skip_reason: Optional[str] = None

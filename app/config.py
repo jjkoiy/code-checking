@@ -32,11 +32,22 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _redis_url() -> str:
+    explicit_url = os.getenv("REDIS_URL")
+    if explicit_url:
+        return explicit_url
+
+    host = os.getenv("REDIS_HOST", "localhost")
+    port = os.getenv("REDIS_PORT", "6379")
+    db = os.getenv("REDIS_DB", "0")
+    return f"redis://{host}:{port}/{db}"
+
+
 @dataclass
 class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/app.db")
-    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    redis_url: str = _redis_url()
     celery_task_soft_time_limit_seconds: int = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT_SECONDS", "600"))
     celery_task_time_limit_seconds: int = int(os.getenv("CELERY_TASK_TIME_LIMIT_SECONDS", "660"))
     celery_task_max_retries: int = int(os.getenv("CELERY_TASK_MAX_RETRIES", "2"))
@@ -57,6 +68,10 @@ class Settings:
     embedding_base_url: str = os.getenv("EMBEDDING_BASE_URL", "")
     embedding_external_enabled: bool = _env_bool("EMBEDDING_EXTERNAL_ENABLED", False)
     embedding_timeout_seconds: int = int(os.getenv("EMBEDDING_TIMEOUT_SECONDS", "60"))
+    rag_retrieval_mode: str = os.getenv("RAG_RETRIEVAL_MODE", "hybrid")
+    rag_vector_top_k: int = int(os.getenv("RAG_VECTOR_TOP_K", "8"))
+    rag_keyword_top_k: int = int(os.getenv("RAG_KEYWORD_TOP_K", "8"))
+    rag_score_threshold: float = float(os.getenv("RAG_SCORE_THRESHOLD", "0.0"))
     review_max_files: int = int(os.getenv("REVIEW_MAX_FILES", "20"))
     review_max_diff_chars: int = int(os.getenv("REVIEW_MAX_DIFF_CHARS", "60000"))
     review_max_file_content_chars: int = int(os.getenv("REVIEW_MAX_FILE_CONTENT_CHARS", "200000"))

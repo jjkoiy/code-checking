@@ -121,3 +121,53 @@ def test_parallel_pipeline_runs_analysis_stages(monkeypatch) -> None:
         finding["title"] == "Print statement in production path"
         for finding in result["json_report"]["findings"]
     )
+
+
+def test_pipeline_includes_rag_risk_findings_before_aggregation(monkeypatch) -> None:
+    diff_text = (
+        "diff --git a/app/auth.py b/app/auth.py\n"
+        "--- a/app/auth.py\n"
+        "+++ b/app/auth.py\n"
+        "@@ -1 +1,3 @@\n"
+        "+def admin_panel(request):\n"
+        "+    admin = request.args.get('admin') == 'true'\n"
+        "+    return admin\n"
+    )
+    monkeypatch.setattr(orchestrator.settings, "agent_execution_mode", "sequential")
+    monkeypatch.setattr(
+        orchestrator.context_builder,
+        "vector_search",
+        lambda collection, query, top_k=3: {"documents": []},
+    )
+    monkeypatch.setattr(
+        orchestrator.test_impact,
+        "vector_search",
+        lambda collection, query, top_k=3: {"documents": []},
+    )
+    monkeypatch.setattr(orchestrator.llm_review, "external_llm_enabled", lambda: False)
+    monkeypatch.setattr(orchestrator.llm_review, "review", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        orchestrator.rag_risk_review,
+        "review",
+        lambda *args, **kwargs: [{
+            "agent_name": "rag_risk_review_agent",
+            "severity": "high",
+            "category": "security",
+            "file_path": "app/auth.py",
+            "line_number": 2,
+            "line_start": 2,
+            "line_end": 3,
+            "title": "Admin privilege is controlled by request data",
+            "description": "Admin comes from a request parameter.",
+            "evidence": "admin = request.args.get('admin') == 'true'",
+            "suggestion": "Use authenticated server-side roles.",
+            "confidence": 0.84,
+            "rule_family": "weak-auth-request-param",
+        }],
+    )
+
+    result = orchestrator.run_review_pipeline("task-rag", _base_state(diff_text))
+
+    findings = result["json_report"]["findings"]
+    assert any(finding.get("rule_family") == "weak-auth-request-param" for finding in findings)
+    assert result["json_report"]["merge_recommendation"]["status"] == "block"

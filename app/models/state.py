@@ -19,6 +19,8 @@ class Finding(TypedDict, total=False):
     confidence: float
     blocking: Optional[bool]
     rule_family: Optional[str]
+    rule_id: Optional[str]
+    context_ids: List[str]
     certainty: Optional[str]
     attack_scenario: Optional[str]
     source_agents: List[str]
@@ -45,6 +47,7 @@ class ReviewState(TypedDict, total=False):
     static_findings: List[Finding]
     style_findings: List[Finding]
     security_findings: List[Finding]
+    rag_risk_findings: List[Finding]
     test_impact: Dict[str, Any]
 
     aggregated_findings: List[Finding]

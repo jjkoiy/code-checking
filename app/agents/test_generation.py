@@ -24,12 +24,21 @@ def _default_test_name(file_path: str, test_type: str) -> str:
 
 
 def _finding_family(finding: dict) -> str:
+    explicit_family = str(finding.get("rule_family") or "")
+    if explicit_family:
+        return explicit_family
     text = " ".join(
         str(finding.get(field, "")).lower()
         for field in ("rule_family", "title", "description", "suggestion")
     )
     if "sql" in text and ("injection" in text or "parameter" in text):
         return "sql-injection"
+    if "path traversal" in text or "filename" in text or "file access" in text:
+        return "path-traversal"
+    if "payment amount" in text or "client-controlled-payment-amount" in text:
+        return "client-controlled-payment-amount"
+    if "admin" in text or "permission" in text or "unauthorized" in text:
+        return "weak-auth-request-param"
     if "exception" in text or "except" in text or "silently" in text:
         return "exception-handling"
     if "auth" in text or "permission" in text or "unauthorized" in text:
@@ -50,6 +59,24 @@ def _test_strategy_for_finding(finding: dict) -> dict:
             "test_type": "unit",
             "risk_covered": "Exception handling regression: verify the error path is observable and not silently swallowed.",
             "assertion_direction": "Mock the failing dependency, assert useful logging or explicit error handling, and assert unexpected errors are not hidden.",
+        }
+    if family == "weak-auth-request-param":
+        return {
+            "test_type": "integration",
+            "risk_covered": "Weak authorization regression: verify client-controlled admin flags cannot grant privileged access.",
+            "assertion_direction": "Send admin=true/is_admin=true as an unauthenticated or normal user and assert the request is denied.",
+        }
+    if family == "path-traversal":
+        return {
+            "test_type": "security",
+            "risk_covered": "Path traversal regression: verify request-controlled filenames cannot escape the allowed base directory.",
+            "assertion_direction": "Use payloads such as ../../etc/passwd and absolute paths, and assert the file read/send operation is rejected.",
+        }
+    if family == "client-controlled-payment-amount":
+        return {
+            "test_type": "integration",
+            "risk_covered": "Payment integrity regression: verify checkout uses the server-side order amount instead of request-provided amount.",
+            "assertion_direction": "Submit a lower amount than the stored order total and assert the charge uses the server-side amount or rejects the request.",
         }
     if family == "auth-todo":
         return {
@@ -96,7 +123,14 @@ def generate(
     findings = list(aggregated_findings) + list(llm_findings)
     targeted_findings = [
         finding for finding in findings
-        if finding.get("rule_family") in {"sql-injection", "exception-handling", "auth-todo"}
+        if finding.get("rule_family") in {
+            "sql-injection",
+            "exception-handling",
+            "auth-todo",
+            "weak-auth-request-param",
+            "path-traversal",
+            "client-controlled-payment-amount",
+        }
         or finding.get("severity") in {"high", "critical"}
     ]
     test_plan: list[dict] = []

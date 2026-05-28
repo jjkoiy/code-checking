@@ -14,7 +14,7 @@ from langgraph.graph import StateGraph, END
 from app.config import settings
 from app.models.state import ReviewState
 from app.agents import context_builder, static_analysis, style_check
-from app.agents import security_scan, finding_aggregator, llm_review
+from app.agents import security_scan, rag_risk_review, finding_aggregator, llm_review
 from app.agents import test_impact, test_generation, validation, report
 from app.services.llm_safety import llm_mode
 
@@ -25,6 +25,7 @@ _PIPELINE_STAGES = [
     "static_analysis",
     "style_check",
     "security_scan",
+    "rag_risk_review",
     "test_impact",
     "finding_aggregator",
     "llm_review",
@@ -93,6 +94,13 @@ def _report_metadata(state: ReviewState) -> dict:
         "llm_mode": state.get("llm_mode", llm_mode()),
         "pipeline_status": "failed" if state.get("errors") else "completed",
         "knowledge_skipped": bool(project_context.get("knowledge_skipped")),
+        "rag": project_context.get("rag", {
+            "retrieval_mode": settings.rag_retrieval_mode,
+            "embedding_provider": settings.embedding_provider,
+            "document_count": 0,
+            "skipped": bool(project_context.get("knowledge_skipped")),
+            "skip_reasons": project_context.get("knowledge_skip_reasons", []),
+        }),
     }
 
 
@@ -203,6 +211,26 @@ def _security_scan_node(state: ReviewState) -> ReviewState:
     return state
 
 
+def _rag_risk_review_node(state: ReviewState) -> ReviewState:
+    logger.info("Stage: rag_risk_review")
+    state["status"] = "rag_risk_review"
+    _notify_stage_start(state, "rag_risk_review")
+    try:
+        findings = rag_risk_review.review(
+            diff_text=state.get("diff_text", ""),
+            changed_files=state.get("changed_files", []),
+            project_context=state.get("project_context", {}),
+        )
+        state["rag_risk_findings"] = findings
+    except Exception as e:
+        logger.error("RAG risk review failed: %s", e)
+        state["errors"].append({"agent": "rag_risk_review", "error": str(e)})
+        state["rag_risk_findings"] = []
+    finally:
+        _notify_stage_end(state, "rag_risk_review")
+    return state
+
+
 def _test_impact_node(state: ReviewState) -> ReviewState:
     logger.info("Stage: test_impact")
     state["status"] = "test_impact"
@@ -232,6 +260,7 @@ def _finding_aggregator_node(state: ReviewState) -> ReviewState:
             state.get("static_findings", [])
             + state.get("style_findings", [])
             + state.get("security_findings", [])
+            + state.get("rag_risk_findings", [])
         )
         aggregated = finding_aggregator.aggregate(
             all_raw,
@@ -372,6 +401,7 @@ def build_review_graph():
     graph.add_node("static_analysis", _static_analysis_node)
     graph.add_node("style_check", _style_check_node)
     graph.add_node("security_scan", _security_scan_node)
+    graph.add_node("rag_risk_review", _rag_risk_review_node)
     graph.add_node("test_impact", _test_impact_node)
     graph.add_node("finding_aggregator", _finding_aggregator_node)
     graph.add_node("llm_review", _llm_review_node)
@@ -385,7 +415,8 @@ def build_review_graph():
     graph.add_edge("context_builder", "static_analysis")
     graph.add_edge("static_analysis", "style_check")
     graph.add_edge("style_check", "security_scan")
-    graph.add_edge("security_scan", "test_impact")
+    graph.add_edge("security_scan", "rag_risk_review")
+    graph.add_edge("rag_risk_review", "test_impact")
     graph.add_edge("test_impact", "finding_aggregator")
     graph.add_edge("finding_aggregator", "llm_review")
     graph.add_edge("llm_review", "test_generation")
@@ -470,6 +501,7 @@ def _run_parallel_pipeline(task_id: str, state: ReviewState) -> dict:
     try:
         state = _context_builder_node(state)
         state = _run_parallel_analysis_stage(state)
+        state = _rag_risk_review_node(state)
         state = _finding_aggregator_node(state)
         state = _llm_review_node(state)
         state = _test_generation_node(state)

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+
 from app.agents import (
     finding_aggregator,
     evidence_extractor,
     llm_review,
+    rag_risk_review,
     report,
     security_scan,
     static_analysis,
@@ -339,6 +342,72 @@ def test_llm_review_redacts_sensitive_values_before_external_call(monkeypatch) -
     assert "[REDACTED_SECRET]" in captured["user_prompt"]
 
 
+def test_llm_review_includes_compact_rag_context_for_external_call(monkeypatch) -> None:
+    captured = {}
+
+    def fake_call_llm(**kwargs):
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return {"parsed_json": {"findings": []}, "content": "{}", "usage": {}}
+
+    monkeypatch.setattr(llm_review.settings, "llm_provider", "deepseek")
+    monkeypatch.setattr(llm_review.settings, "llm_model", "deepseek-chat")
+    monkeypatch.setattr(llm_review.settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(llm_review.settings, "llm_external_enabled", True)
+    monkeypatch.setattr(llm_review.settings, "llm_redaction_enabled", False)
+    monkeypatch.setattr(llm_review, "call_llm", fake_call_llm)
+
+    llm_review.review(
+        diff_text="""diff --git a/app/demo.py b/app/demo.py
+--- a/app/demo.py
++++ b/app/demo.py
+@@ -1 +1,2 @@
++def handler(request):
++    return request.args.get("name")
+""",
+        changed_files=[{"file_path": "app/demo.py", "language": "python"}],
+        aggregated_findings=[],
+        project_context={
+            "relevant_rules": [{
+                "id": "rule-1",
+                "content": "Routes should delegate business logic to services.",
+                "metadata": {"category": "architecture", "ignored": "drop-me"},
+                "score": 0.8,
+            }],
+            "relevant_project_context": [{
+                "id": "ctx-1",
+                "content": "def existing_handler(): pass",
+                "metadata": {
+                    "repo_name": "owner/repo",
+                    "file_path": "app/existing.py",
+                    "content_hash": "abc123",
+                },
+            }],
+            "relevant_test_examples": [{
+                "id": "test-1",
+                "content": "Use TestClient for route coverage.",
+                "metadata": {"framework": "pytest"},
+            }],
+        },
+    )
+
+    prompt = json.loads(captured["user_prompt"])
+
+    assert prompt["rag_context"]["relevant_rules"][0]["content"] == (
+        "Routes should delegate business logic to services."
+    )
+    assert prompt["rag_context"]["relevant_rules"][0]["metadata"] == {
+        "category": "architecture"
+    }
+    assert prompt["rag_context"]["relevant_project_context"][0]["metadata"] == {
+        "repo_name": "owner/repo",
+        "file_path": "app/existing.py",
+        "content_hash": "abc123",
+    }
+    assert prompt["rag_context"]["relevant_test_examples"][0]["metadata"] == {
+        "framework": "pytest"
+    }
+
+
 def test_plain_text_input_does_not_trigger_mock_llm_findings(monkeypatch) -> None:
     monkeypatch.setattr(llm_review.settings, "llm_provider", "mock")
     monkeypatch.setattr(llm_review.settings, "llm_api_key", "")
@@ -546,6 +615,322 @@ SECRET = "change-me"
     assert not any(finding["title"] == "Hardcoded secret or credential" for finding in findings)
 
 
+def test_rag_risk_review_flags_admin_request_param(monkeypatch) -> None:
+    risk_card = {
+        "risk_id": "weak-auth-request-param",
+        "title": "Admin privilege is controlled by request data",
+        "severity": "high",
+        "category": "security",
+        "source_patterns": ["request.args", "request.json"],
+        "sink_patterns": ["admin", "debug_token"],
+        "evidence_requirements": "Show that admin privilege comes from request data.",
+        "suggestion": "Use authenticated server-side role checks instead of request parameters.",
+        "attack_scenario": "A user can send admin=true to reach privileged behavior.",
+    }
+    monkeypatch.setattr(
+        rag_risk_review,
+        "vector_search",
+        lambda collection, query, top_k=8: {
+            "documents": [{
+                "id": "weak-auth",
+                "content": __import__("json").dumps(risk_card),
+                "metadata": {},
+            }]
+        },
+    )
+    diff_text = """diff --git a/app/auth.py b/app/auth.py
+--- a/app/auth.py
++++ b/app/auth.py
+@@ -1 +1,5 @@
++def admin_panel(request):
++    admin = request.args.get("admin") == "true"
++    if admin:
++        return {"debug_token": "secret"}
++    return {}
+"""
+
+    findings = rag_risk_review.review(
+        diff_text,
+        [{"file_path": "app/auth.py", "language": "python"}],
+    )
+
+    assert len(findings) == 1
+    assert findings[0]["agent_name"] == "rag_risk_review_agent"
+    assert findings[0]["rule_family"] == "weak-auth-request-param"
+    assert findings[0]["severity"] == "high"
+    assert findings[0]["file_path"] == "app/auth.py"
+    assert "request.args" in findings[0]["evidence"]
+    assert "debug_token" in findings[0]["evidence"]
+
+
+def test_rag_risk_review_does_not_report_without_required_sink(monkeypatch) -> None:
+    risk_card = {
+        "risk_id": "client-controlled-payment-amount",
+        "title": "Payment amount is trusted from client input",
+        "severity": "critical",
+        "category": "security",
+        "source_patterns": ["request.json", "amount"],
+        "sink_patterns": ["charge(", "pay("],
+        "suggestion": "Load the amount from the server-side order record.",
+    }
+    monkeypatch.setattr(
+        rag_risk_review,
+        "vector_search",
+        lambda collection, query, top_k=8: {
+            "documents": [{
+                "id": "payment",
+                "content": __import__("json").dumps(risk_card),
+                "metadata": {},
+            }]
+        },
+    )
+
+    findings = rag_risk_review.review(
+        "",
+        [{
+            "file_path": "app/payments.py",
+            "language": "python",
+            "content": "def preview(request):\n    amount = request.json['amount']\n    return {'amount': amount}\n",
+        }],
+    )
+
+    assert findings == []
+
+
+def test_rag_risk_review_skips_path_traversal_when_safe_join_is_used(monkeypatch) -> None:
+    risk_card = {
+        "risk_id": "path-traversal",
+        "title": "Request-controlled filename reaches file access",
+        "severity": "high",
+        "category": "security",
+        "source_patterns": ["request.args", "filename"],
+        "sink_patterns": ["open("],
+        "suggestion": "Use safe path joining and boundary checks.",
+    }
+    monkeypatch.setattr(
+        rag_risk_review,
+        "vector_search",
+        lambda collection, query, top_k=8: {
+            "documents": [{
+                "id": "path",
+                "content": __import__("json").dumps(risk_card),
+                "metadata": {},
+            }]
+        },
+    )
+
+    findings = rag_risk_review.review(
+        "",
+        [{
+            "file_path": "app/download.py",
+            "language": "python",
+            "content": "\n".join([
+                "def download(request):",
+                "    filename = request.args.get('filename')",
+                "    path = safe_join('/srv/files', filename)",
+                "    return open(path).read()",
+            ]),
+        }],
+    )
+
+    assert findings == []
+
+
+def test_rag_risk_review_uses_sanitizer_patterns_to_avoid_false_positive(monkeypatch) -> None:
+    risk_card = {
+        "risk_id": "path-traversal",
+        "title": "Request-controlled filename reaches file access",
+        "severity": "high",
+        "category": "security",
+        "source_patterns": ["request.args", "filename"],
+        "sink_patterns": ["open("],
+        "sanitizer_patterns": ["sanitize_filename("],
+        "suggestion": "Sanitize and resolve paths under an allowed base directory.",
+    }
+    monkeypatch.setattr(
+        rag_risk_review,
+        "vector_search",
+        lambda collection, query, top_k=8: {
+            "documents": [{
+                "id": "path",
+                "content": json.dumps(risk_card),
+                "metadata": {},
+            }]
+        },
+    )
+
+    findings = rag_risk_review.review(
+        "",
+        [{
+            "file_path": "app/download.py",
+            "language": "python",
+            "content": "\n".join([
+                "def download(request):",
+                "    filename = sanitize_filename(request.args.get('filename'))",
+                "    return open(filename).read()",
+            ]),
+        }],
+    )
+
+    assert findings == []
+
+
+def test_rag_risk_review_does_not_let_unrelated_sanitizer_hide_unsafe_flow(monkeypatch) -> None:
+    risk_card = {
+        "risk_id": "path-traversal",
+        "title": "Request-controlled filename reaches file access",
+        "severity": "high",
+        "category": "security",
+        "source_patterns": ["request.args", "filename"],
+        "sink_patterns": ["open("],
+        "sanitizer_patterns": ["sanitize_filename("],
+        "suggestion": "Sanitize and resolve paths under an allowed base directory.",
+    }
+    monkeypatch.setattr(
+        rag_risk_review,
+        "vector_search",
+        lambda collection, query, top_k=8: {
+            "documents": [{
+                "id": "path",
+                "content": json.dumps(risk_card),
+                "metadata": {},
+            }]
+        },
+    )
+
+    findings = rag_risk_review.review(
+        "",
+        [{
+            "file_path": "app/download.py",
+            "language": "python",
+            "content": "\n".join([
+                "def download(request):",
+                "    preview = sanitize_filename('example.txt')",
+                "    filename = request.args.get('filename')",
+                "    return open(filename).read()",
+            ]),
+        }],
+    )
+
+    assert len(findings) == 1
+    assert findings[0]["rule_family"] == "path-traversal"
+    assert "request.args" in findings[0]["evidence"]
+    assert "open(filename)" in findings[0]["evidence"]
+
+
+def test_rag_risk_review_attaches_rule_and_context_ids(monkeypatch) -> None:
+    risk_card = {
+        "risk_id": "weak-auth-request-param",
+        "title": "Admin privilege is controlled by request data",
+        "severity": "high",
+        "category": "security",
+        "source_patterns": ["request.args"],
+        "sink_patterns": ["admin_panel"],
+        "suggestion": "Use the current_user_role helper for server-side role checks.",
+    }
+    monkeypatch.setattr(
+        rag_risk_review,
+        "vector_search",
+        lambda collection, query, top_k=8: {
+            "documents": [{
+                "id": "weak-auth-rule",
+                "content": json.dumps(risk_card),
+                "metadata": {},
+            }]
+        },
+    )
+
+    findings = rag_risk_review.review(
+        "",
+        [{
+            "file_path": "app/auth.py",
+            "language": "python",
+            "content": "\n".join([
+                "def admin_panel(request):",
+                "    admin_panel_enabled = request.args.get('admin') == 'true'",
+                "    return current_user_role(request.user) if admin_panel_enabled else None",
+            ]),
+        }],
+        project_context={
+            "relevant_project_context": [{
+                "id": "ctx-role-helper",
+                "content": "def current_user_role(user): return user.role",
+                "metadata": {"symbol_name": "current_user_role"},
+            }]
+        },
+    )
+
+    assert findings
+    assert findings[0]["rule_id"] == "weak-auth-rule"
+    assert findings[0]["rule_family"] == "weak-auth-request-param"
+    assert findings[0]["context_ids"] == ["ctx-role-helper"]
+
+
+def test_rag_golden_payment_amount_source_to_sink(monkeypatch) -> None:
+    risk_card = {
+        "risk_id": "client-controlled-payment-amount",
+        "title": "Payment amount is trusted from client input",
+        "severity": "critical",
+        "category": "security",
+        "source_patterns": ["request.json", "amount"],
+        "sink_patterns": ["charge("],
+        "suggestion": "Load payable amount from the server-side order record.",
+    }
+    monkeypatch.setattr(
+        rag_risk_review,
+        "vector_search",
+        lambda collection, query, top_k=8: {
+            "documents": [{
+                "id": "payment-rule",
+                "content": json.dumps(risk_card),
+                "metadata": {},
+                "score": 0.9,
+                "rank": 1,
+            }]
+        },
+    )
+
+    findings = rag_risk_review.review(
+        "",
+        [{
+            "file_path": "app/payments.py",
+            "language": "python",
+            "content": "\n".join([
+                "def checkout(request, order_id):",
+                "    amount = request.json['amount']",
+                "    return charge(amount, order_id)",
+            ]),
+        }],
+    )
+    aggregated = finding_aggregator.aggregate(findings)
+
+    assert findings[0]["rule_id"] == "payment-rule"
+    assert findings[0]["rule_family"] == "client-controlled-payment-amount"
+    assert aggregated[0]["blocking"] is True
+
+
+def test_rag_risk_review_uses_configured_top_k(monkeypatch) -> None:
+    captured: dict[str, int] = {}
+
+    def fake_vector_search(collection, query, top_k=8):
+        captured["top_k"] = top_k
+        return {"documents": []}
+
+    monkeypatch.setattr(rag_risk_review.settings, "rag_vector_top_k", 13)
+    monkeypatch.setattr(rag_risk_review, "vector_search", fake_vector_search)
+
+    rag_risk_review.review(
+        "",
+        [{
+            "file_path": "app/auth.py",
+            "language": "python",
+            "content": "def handler(request):\n    return request.args.get('admin')\n",
+        }],
+    )
+
+    assert captured["top_k"] == 13
+
+
 def test_report_uses_plain_ok_text_for_empty_review() -> None:
     result = report.generate([], [], {}, {})
 
@@ -564,6 +949,13 @@ def test_report_includes_metadata_and_review_scope() -> None:
             "duration_seconds": 0.12,
             "llm_mode": "mock",
             "pipeline_status": "completed",
+            "rag": {
+                "retrieval_mode": "hybrid",
+                "embedding_provider": "hash",
+                "document_count": 3,
+                "skipped": False,
+                "skip_reasons": [],
+            },
         },
         review_scope={
             "file_count": 2,
@@ -575,6 +967,7 @@ def test_report_includes_metadata_and_review_scope() -> None:
     )
 
     assert result["json_report"]["metadata"]["agent_count"] == 10
+    assert result["json_report"]["metadata"]["rag"]["document_count"] == 3
     assert result["json_report"]["review_scope"]["file_count"] == 2
     assert "## Review Scope" in result["markdown_report"]
 

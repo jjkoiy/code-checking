@@ -21,6 +21,8 @@ class FindingModel(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     blocking: bool = False
     rule_family: str | None = None
+    rule_id: str | None = None
+    context_ids: list[str] = Field(default_factory=list)
     certainty: Literal["confirmed", "potential", "needs_context"] | None = None
     attack_scenario: str | None = None
     source_agents: list[str] = Field(default_factory=list)

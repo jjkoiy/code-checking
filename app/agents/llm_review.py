@@ -14,13 +14,38 @@ from app.services.llm_safety import external_llm_enabled, llm_mode, redact_text
 
 logger = logging.getLogger(__name__)
 
+_RAG_CONTEXT_LIMITS = {
+    "relevant_rules": 3,
+    "relevant_project_context": 5,
+    "relevant_test_examples": 3,
+}
+_RAG_CONTENT_CHARS = 800
+_RAG_METADATA_KEYS = {
+    "repo_name",
+    "file_path",
+    "chunk_index",
+    "content_hash",
+    "start_line",
+    "end_line",
+    "symbol_name",
+    "chunk_type",
+    "language",
+    "category",
+    "severity",
+    "framework",
+    "rule_family",
+    "risk_id",
+    "cwe",
+}
+
 LLM_REVIEW_SYSTEM_PROMPT = """You are the LLM Review Agent in a multi-agent code review system.
 Return only JSON with this shape: {"findings": [Finding]}.
 Each Finding must include agent_name, severity, category, file_path, line_number, title,
 description, evidence, suggestion, confidence. Only report actionable defects supported by
 specific changed code. Do not report generic reminders such as "needs review" or broad
 best-practice advice. If a finding lacks file_path, line_number, evidence, and a concrete
-fix suggestion, omit it."""
+fix suggestion, omit it. When a RAG rule or repository context supports a finding, include
+rule_family and mention the supporting rule/context id in the description or evidence."""
 
 
 def _reviewable_changes(diff_text: str, changed_files: list[dict]) -> list[dict]:
@@ -78,6 +103,45 @@ def _reviewable_text(changes: list[dict]) -> tuple[str, list[str]]:
         ]
         snippets.append(f"File: {file_path}\n" + "\n".join(lines))
     return "\n\n".join(snippets), file_paths
+
+
+def _compact_rag_document(document: dict, content_chars: int = _RAG_CONTENT_CHARS) -> dict:
+    metadata = document.get("metadata") if isinstance(document.get("metadata"), dict) else {}
+    compact = {
+        "id": document.get("id"),
+        "content": str(document.get("content", ""))[:content_chars],
+        "metadata": {
+            key: metadata[key]
+            for key in _RAG_METADATA_KEYS
+            if key in metadata
+        },
+    }
+    if "score" in document:
+        compact["score"] = document.get("score")
+    for key in ("collection", "rank", "retrieval_method", "hit_reason"):
+        if key in document:
+            compact[key] = document.get(key)
+    return compact
+
+
+def _compact_project_context(project_context: dict | None) -> dict:
+    if not isinstance(project_context, dict):
+        return {}
+
+    compact: dict[str, list[dict]] = {}
+    for key, limit in _RAG_CONTEXT_LIMITS.items():
+        documents = project_context.get(key)
+        if not isinstance(documents, list):
+            continue
+        compact[key] = [
+            _compact_rag_document(document)
+            for document in documents[:limit]
+            if isinstance(document, dict)
+        ]
+    result = {key: value for key, value in compact.items() if value}
+    if isinstance(project_context.get("rag"), dict):
+        result["retrieval_summary"] = project_context["rag"]
+    return result
 
 
 def _mock_llm_call(changes: list[dict]) -> list[dict]:
@@ -159,6 +223,11 @@ def review(diff_text: str, changed_files: list[dict],
     if not review_text.strip():
         return []
 
+    mode = llm_mode()
+    if not external_llm_enabled():
+        logger.info("LLM review running in %s mode.", mode)
+        return _mock_llm_call(changes)
+
     user_prompt = json.dumps({
         "changed_code": review_text[: settings.review_max_diff_chars],
         "changed_files": [
@@ -166,12 +235,8 @@ def review(diff_text: str, changed_files: list[dict],
             if is_code_file(f.get("file_path"), f.get("language"))
         ],
         "aggregated_findings": aggregated_findings,
+        "rag_context": _compact_project_context(project_context),
     })
-
-    mode = llm_mode()
-    if not external_llm_enabled():
-        logger.info("LLM review running in %s mode.", mode)
-        return _mock_llm_call(changes)
 
     try:
         response = call_llm(
