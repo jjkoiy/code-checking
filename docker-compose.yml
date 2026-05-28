@@ -19,6 +19,24 @@ services:
       redis:
         condition: service_started
 
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A app.worker.celery_app worker --pool=solo -l info
+    environment:
+      APP_ENV: development
+      DATABASE_URL: sqlite:///./data/app.db
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      LLM_PROVIDER: mock
+      LLM_EXTERNAL_ENABLED: "false"
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      redis:
+        condition: service_started
+
   redis:
     image: redis:7-alpine
     ports:
